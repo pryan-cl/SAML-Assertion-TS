@@ -565,6 +565,25 @@ const dec=new TextDecoder('utf-8');
 const dt = s => { const d=new Date(s); return isNaN(d)?null:d; };
 const daysLeft = d => (d - Date.now())/86400000;
 
+/* Certificate thumbprints arrive in three different shapes and have to be
+   compared against each other. Graph sends keyCredentials[].customKeyIdentifier
+   as base64 binary, sends preferredTokenSigningKeyThumbprint as hex, and
+   PowerShell's ConvertTo-Json renders the same byte[] as an array of numbers.
+   Comparing them without normalising means the active-certificate match never
+   fires, so normalise everything to uppercase hex. */
+function thumbHex(v){
+  if(v==null) return '';
+  if(Array.isArray(v)) return v.map(b=>(b&255).toString(16).padStart(2,'0')).join('').toUpperCase();
+  const s=String(v).trim().replace(/[\s:]/g,'');
+  if(!s) return '';
+  if(/^[0-9a-f]{40}$/i.test(s)) return s.toUpperCase();   /* already hex, check first: 40 hex chars are also valid base64 */
+  try{
+    const h=Array.from(b64bytes(s)).map(b=>b.toString(16).padStart(2,'0')).join('').toUpperCase();
+    if(h) return h;
+  }catch(e){}
+  return s.toUpperCase().replace(/[^0-9A-F]/g,'');
+}
+
 document.querySelectorAll('.chan').forEach(btn=>{
   btn.addEventListener('click',()=>{
     document.querySelectorAll('.chan').forEach(b=>{
@@ -720,22 +739,23 @@ function analyseServicePrincipal(sp){
       'Assertions are encrypted, so they cannot be read from a browser capture. Turn it off for the duration of a test, or work from the SP logs.');
 
   const certs=(sp.keyCredentials||[]).filter(k=>k.usage==='Verify'||k.type==='AsymmetricX509Cert');
-  const active=(sp.preferredTokenSigningKeyThumbprint||'').toUpperCase().replace(/[^0-9A-F]/g,'');
+  const active=thumbHex(sp.preferredTokenSigningKeyThumbprint);
   let certRows='';
   if(!certs.length){
     st.cert='warn';
     certRows=findRow('warn','Signing certificates','none returned',
       'Either SAML is not configured or the reader lacks permission to see key credentials.');
   } else {
-    let worst='pass';
+    let worst='pass', matched=false;
     certs.sort((a,b)=> new Date(b.endDateTime||0)-new Date(a.endDateTime||0));
     certs.forEach(k=>{
       const end=dt(k.endDateTime);
-      const tp=(k.customKeyIdentifier||'').toUpperCase();
-      const isActive = active && tp.replace(/[^0-9A-F]/g,'')===active;
+      const tp=thumbHex(k.customKeyIdentifier);
+      const isActive = !!active && !!tp && tp===active;
       const d = end?daysLeft(end):null;
       let s='info';
       if(isActive){
+        matched=true;
         s = d===null?'info' : d<0?'fail' : d<45?'warn':'pass';
         if(WORST.indexOf(s)>WORST.indexOf(worst)) worst=s;
       }
@@ -745,9 +765,18 @@ function analyseServicePrincipal(sp){
           d!==null ? (d<0?` &middot; <b>expired ${Math.abs(Math.round(d))} days ago</b>` : ` &middot; ${Math.round(d)} days left`) : ''}${
           isActive?'<br><b>This is the thumbprint Entra signs with.</b> It must match what the SP has pinned. If the SP holds a different one, that is your outage.':''}`);
     });
+    /* If nothing matched, the expiry check above never ran, so the segment must
+       not read green. Not knowing is a warn, not a pass. */
+    if(!active){
+      worst=roll([worst,'warn']);
+      certRows+=findRow('warn','Active key','not indicated',
+        'The tenant did not report a preferred signing key thumbprint, so the expiry check above could not be applied to a specific certificate. Check the SAML certificates blade.');
+    } else if(!matched){
+      worst=roll([worst,'warn']);
+      certRows+=findRow('warn','Active key',`<code>${esc(active)}</code>`,
+        'The tenant reports this as the preferred signing thumbprint, but none of the certificates above carry it, so the expiry check could not be applied. Read the expiry from the SAML certificates blade rather than trusting this card.');
+    }
     st.cert=worst;
-    if(!active) certRows+=findRow('warn','Active key','not indicated',
-      'The tenant did not report a preferred signing key thumbprint, so you cannot tell from here which certificate is in use. Check the SAML certificates blade.');
   }
   return {rows, certRows, st, sp};
 }
