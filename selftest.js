@@ -90,6 +90,32 @@ async function selfTest(){
   await t('group-inherited assignment passes',          ()=>eq(asg([],{userId:'u1',groupIds:['g1','g2'],assigned:new Set(['g2']),complete:true,truncated:false}).st.assigned,'pass'));
   await t('service-principal-side direct match passes', ()=>eq(asg([],{userId:'u1',groupIds:[],assigned:new Set(['u1']),complete:true,truncated:false}).st.assigned,'pass'));
   await t('genuinely unassigned user fails',            ()=>eq(asg([],{userId:'u1',groupIds:['g1'],assigned:new Set(['g9']),complete:true,truncated:false}).st.assigned,'fail'));
+
+  /* A 200 can carry a partial membership list, notably for hidden-membership
+     groups, and nothing in the response flags it. The verdict stays fail, but
+     it must show its working rather than assert a certainty it lacks. */
+  const unassigned=(groups,principals)=>asg([],{userId:'u1',
+    groupIds:groups, assigned:new Set(principals), complete:true, truncated:false});
+  await t('the fail note states how many groups and principals were checked', ()=>{
+    const r=unassigned(['g1','g2'],['g9']);
+    if(!/2 groups/.test(r.rows)) return 'did not state the group count';
+    return has(r.rows,/1 principal\b/);
+  });
+  await t('counts are singular when there is one of them', ()=>
+    has(unassigned(['g1'],['g9']).rows,/1 group\b/));
+  await t('the fail note names an authority instead of asserting certainty', ()=>
+    has(unassigned(['g1'],['g9']).rows,/Users and groups/));
+  await t('the fail note warns that hidden group membership is invisible', ()=>
+    has(unassigned(['g1'],['g9']).rows,/hidden is not returned/));
+  await t('zero visible groups gets a stronger caveat', ()=>{
+    const r=unassigned([],['g9']);
+    if(!/No group memberships were visible/.test(r.rows)) return 'no caveat when nothing was visible';
+    return has(r.rows,/conclusion is unsafe/);
+  });
+  await t('the stronger caveat is absent when groups were visible', ()=>
+    not(unassigned(['g1'],['g9']).rows,/No group memberships were visible/));
+  await t('the verdict is still fail, not softened to warn', ()=>
+    eq(unassigned([],['g9']).st.assigned,'fail'));
   await t('only a complete check may cite AADSTS50105', ()=>not(asg([],{userId:'u1',groupIds:['g1'],assigned:new Set(['g9']),complete:false,truncated:true}).rows,/AADSTS50105/));
   await t('truncated paging degrades to warn, not fail',()=>eq(asg([],{userId:'u1',groupIds:['g1'],assigned:new Set(['g9']),complete:false,truncated:true}).st.assigned,'warn'));
 

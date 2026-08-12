@@ -967,8 +967,21 @@ function analyseAssignments(list, sp, ctx){
     if(via.length) return {rows:findRow('pass','Assigned to app',`yes, through ${via.length} assigned group(s)`,
       `The user inherits the assignment from group membership. Their own <code>appRoleAssignments</code> list is empty, which is normal for group-based assignment and is <b>not</b> a fault. Group object ID${via.length>1?'s':''} <code>${via.slice(0,5).map(esc).join('</code> <code>')}</code>${via.length>5?' and more':''}.`),
       st:{assigned:'pass'}};
+    /* complete only means the page bounds were not hit. Graph can return 200
+       carrying a partial membership list, notably for groups whose membership
+       is hidden from the caller, and nothing in the response says so. The
+       verdict stays fail because that is the right primary diagnosis, but it
+       has to show its working and name an authority rather than assert a
+       certainty it does not have. Telling a district their user is unassigned
+       when a hidden group grants access costs more than a hedge does. */
+    const groups=ctx.groupIds.length, principals=ctx.assigned.size;
+    const plural=(n,w)=>`${n} ${w}${n===1?'':'s'}`;
     return {rows:findRow('fail','Assigned to app','no',
-      `Checked the ${ctx.assigned.size} principal(s) assigned to this app against this user and all ${ctx.groupIds.length} group(s) they are a transitive member of. Nothing matches. This produces AADSTS50105 and no assertion is issued at all. Assign the user or one of their groups on the enterprise app.`),
+      `Checked this user and ${plural(groups,'group')} they are a transitive member of against ${plural(principals,'principal')} assigned to this app. Nothing matched, which produces AADSTS50105 with no assertion issued at all. Assign the user, or one of their groups, on the enterprise app.`+
+      (groups===0
+        ? ' <b>No group memberships were visible for this user at all.</b> If they should be in one, the signed-in account may not be able to see it, and this conclusion is unsafe as it stands.'
+        : '')+
+      ' Membership of groups configured as hidden is not returned to every caller, so confirm under <em>Users and groups</em> on the enterprise app before telling a district that their user is unassigned.'),
       st:{assigned:'fail'}};
   }
   return {rows:findRow('warn','Assigned to app','no direct assignment; group assignments not checked',
