@@ -812,39 +812,91 @@ function analyseUser(u){
   return {rows, st, u};
 }
 
-function analyseAssignments(list, sp){
+/* Assignments inherited through a group never appear on
+   /users/{id}/appRoleAssignments, which returns direct assignments only.
+   Districts assign by group as the normal case, so treating an empty list as
+   "not assigned" reported AADSTS50105 for correctly configured users. A
+   definitive answer has to come from the service principal side, via
+   assignmentContext() below. Without it, say so rather than guess. */
+function analyseAssignments(list, sp, ctx){
   if(!sp) return {rows:findRow('info','Assignment check','app configuration not loaded',
     'Paste the service principal first so this can be compared against it.'), st:{}};
   if(!sp.appRoleAssignmentRequired) return {rows:findRow('na','Assignment check','not required',
     'The app allows any user in the tenant, so assignment is not the problem.'), st:{}};
-  const hit=(list||[]).find(a=> a.resourceId===sp.id || a.resourceDisplayName===sp.displayName);
-  return {
-    rows: findRow(hit?'pass':'fail','Assigned to app', hit?'yes':'no',
-      hit ? 'Assignment is not the blocker.'
-          : 'The app requires assignment and this user has none, directly or through a group. This produces AADSTS50105 and no assertion is issued at all. Assign the user or their group on the enterprise app.'),
-    st:{assigned: hit?'pass':'fail'}
+
+  const direct=(list||[]).find(a=> a.resourceId===sp.id || a.resourceDisplayName===sp.displayName);
+  if(direct) return {rows:findRow('pass','Assigned to app','yes, directly',
+    'Assignment is not the blocker.'), st:{assigned:'pass'}};
+
+  /* No direct assignment. That is not the same as no assignment. */
+  if(ctx&&ctx.complete){
+    if(ctx.userId&&ctx.assigned.has(ctx.userId)) return {rows:findRow('pass','Assigned to app','yes, directly',
+      'The app lists this user as an assigned principal.'), st:{assigned:'pass'}};
+    const via=ctx.groupIds.filter(id=>ctx.assigned.has(id));
+    if(via.length) return {rows:findRow('pass','Assigned to app',`yes, through ${via.length} assigned group(s)`,
+      `The user inherits the assignment from group membership. Their own <code>appRoleAssignments</code> list is empty, which is normal for group-based assignment and is <b>not</b> a fault. Group object ID${via.length>1?'s':''} <code>${via.slice(0,5).map(esc).join('</code> <code>')}</code>${via.length>5?' and more':''}.`),
+      st:{assigned:'pass'}};
+    return {rows:findRow('fail','Assigned to app','no',
+      `Checked the ${ctx.assigned.size} principal(s) assigned to this app against this user and all ${ctx.groupIds.length} group(s) they are a transitive member of. Nothing matches. This produces AADSTS50105 and no assertion is issued at all. Assign the user or one of their groups on the enterprise app.`),
+      st:{assigned:'fail'}};
+  }
+  return {rows:findRow('warn','Assigned to app','no direct assignment; group assignments not checked',
+    ctx&&ctx.truncated
+      ? 'The app has more assigned principals or the user has more group memberships than could be read in full, so an inherited assignment cannot be ruled out. Check <em>Users and groups</em> on the enterprise app.'
+      : 'This list covers <b>direct</b> assignments only. An assignment inherited through a group never appears here, so an empty list is not evidence the user is unassigned. Run the live check, or read <em>Users and groups</em> on the enterprise app.'),
+    st:{assigned:'warn'}};
+}
+
+/* Reads the assignment question from the side that can actually answer it:
+   every principal assigned to the app, plus every group the user is a
+   transitive member of. Pages are bounded, and a bound that is hit sets
+   truncated so the verdict degrades to "cannot tell" instead of "no". */
+async function assignmentContext(spId, userQ){
+  const ctx={userId:null, groupIds:[], assigned:new Set(), complete:false, truncated:false};
+  const drain=async (path, take)=>{
+    let url=path;
+    for(let page=0; url; page++){
+      if(page>=10){ ctx.truncated=true; return; }
+      const r=await g(url);
+      (r.value||[]).forEach(take);
+      const n=r['@odata.nextLink'];
+      url = n ? n.replace(/^https:\/\/graph\.microsoft\.com\/v1\.0/,'') : null;
+    }
   };
+  await drain(`/servicePrincipals/${encodeURIComponent(spId)}/appRoleAssignedTo?$select=principalId&$top=999`,
+    a=>{ if(a.principalId) ctx.assigned.add(a.principalId); });
+  await drain(`/users/${encodeURIComponent(userQ)}/transitiveMemberOf/microsoft.graph.group?$select=id&$top=999`,
+    x=>{ if(x.id) ctx.groupIds.push(x.id); });
+  ctx.complete=!ctx.truncated;
+  return ctx;
 }
 
 function analyseSignIns(items){
   if(!items||!items.length) return {rows:findRow('na','Sign-in log','no matching entries',
     'Either the sign-in has not happened in the retained window, or the filter did not match. Entra ID Free tenants cannot serve this API at all.'), st:{}};
-  let worst='pass';
+  let worst='pass', unknown=0;
   let t='<div style="overflow-x:auto"><table class="claims"><thead><tr><th>When (UTC)</th><th>Status</th><th>User</th><th>Detail</th><th>Correlation ID</th></tr></thead><tbody>';
   items.slice(0,15).forEach(s=>{
-    const code=(s.status&&s.status.errorCode)||0, ok=code===0;
-    if(!ok) worst='fail';
+    /* An absent status object is not a success. Reading it as errorCode 0
+       rendered incomplete entries green, which is the one direction a
+       diagnostic must never fail in. */
+    const code=(s.status&&typeof s.status.errorCode==='number')?s.status.errorCode:null;
+    const ok=code===0;
+    if(code===null){ unknown++; worst=roll([worst,'warn']); }
+    else if(!ok) worst='fail';
     const ca=s.conditionalAccessStatus;
     const pols=(s.appliedConditionalAccessPolicies||[])
       .filter(p=>p.result==='failure').map(p=>p.displayName).join('; ');
     t+=`<tr><td>${esc((s.createdDateTime||'').replace('T',' ').slice(0,19))}</td>`+
-       `<td class="st-${ok?'pass':'fail'}">${ok?'success':'AADSTS'+code}</td>`+
+       `<td class="${code===null?'':ok?'st-pass':'st-fail'}">${code===null?'no status returned':ok?'success':'AADSTS'+code}</td>`+
        `<td>${esc(s.userPrincipalName||'')}</td>`+
        `<td>${esc(((s.status&&s.status.failureReason)||'').slice(0,180))}${
           ca&&ca!=='notApplied'?`<br>CA: ${esc(ca)}${pols?' — blocked by '+esc(pols):''}`:''}</td>`+
        `<td>${esc(s.correlationId||'')}</td></tr>`;
   });
   t+='</tbody></table></div>';
+  if(unknown) t+=findRow('warn','Incomplete entries',`${unknown} row(s) carry no status`,
+    'Those rows are not successes, they are unreadable. A <code>$select</code> that omits <code>status</code>, or a hand-trimmed paste, produces this. Re-read them with the full object before drawing any conclusion.');
   t+=findRow(worst,'Escalation','Send the SP the correlation ID plus the UTC timestamp',
     'That pair lets them find the same transaction in their own logs. A screenshot of the browser error does not.');
   return {rows:t, st:{signin:worst}};
@@ -912,7 +964,19 @@ $('runChecks').addEventListener('click', async ()=>{
       parts.usr=analyseUser(u);
       try{
         const a=await g(`/users/${encodeURIComponent(userQ)}/appRoleAssignments`);
-        parts.asg=analyseAssignments(a.value, sp);
+        /* Only worth the extra reads when assignment can actually block sign-in. */
+        let ctx=null;
+        if(sp&&sp.id&&sp.appRoleAssignmentRequired){
+          try{
+            ctx=await assignmentContext(sp.id, userQ);
+            if(u.id) ctx.userId=u.id;
+          }catch(e){
+            ctx=null;
+            errors+=findRow('warn','Group assignment read',esc(e.message),
+              graphHint(e)||'Falling back to the direct-assignment view, which cannot see group-inherited assignments.');
+          }
+        }
+        parts.asg=analyseAssignments(a.value, sp, ctx);
       }catch(e){ errors+=findRow('warn','Assignment read',esc(e.message),graphHint(e)); }
     }catch(e){ errors+=findRow('fail','User read',esc(e.message),graphHint(e)); }
   }
@@ -1050,7 +1114,11 @@ function certValidity(der){
       const rd=o=>{let s='';for(let j=0;j<13;j++)s+=String.fromCharCode(der[o+j]);
         const yy=+s.slice(0,2),y=yy<50?2000+yy:1900+yy;
         return new Date(Date.UTC(y,+s.slice(2,4)-1,+s.slice(4,6),+s.slice(6,8),+s.slice(8,10),+s.slice(10,12)));};
-      return {from:rd(i+4),to:rd(i+19)};
+      /* The byte pattern can match non-date bytes, and an Invalid Date here
+         used to throw out of the caller on toISOString(). Never return one. */
+      const from=rd(i+4), to=rd(i+19);
+      if(isNaN(from)||isNaN(to)) return null;
+      return {from,to};
     }
   }
   return null;
@@ -1155,8 +1223,19 @@ async function inspectSaml(){
         weak?'SHA-1. Entra defaults to SHA-256; something set this down deliberately and some SPs now refuse it.':'');
     }
     const certNode=first(root,'X509Certificate');
+    let der=null;
+    /* A truncated paste is the most likely bad input this tool ever sees, and
+       atob throws on it. Degrade to one row rather than losing the audience,
+       timing and claims checks, which are still worth reading. */
     if(certNode){
-      const der=b64bytes(txt(certNode)), tp=await thumbprints(der), val=certValidity(der);
+      try{ der=b64bytes(txt(certNode)); }
+      catch(e){
+        rows+=findRow('warn','Certificate','embedded but not decodable',
+          'The <code>X509Certificate</code> element is not valid base64, which usually means the paste was truncated. Re-copy the whole <code>SAMLResponse</code> value. Every other check on this page is unaffected.');
+      }
+    }
+    if(der){
+      const tp=await thumbprints(der), val=certValidity(der);
       rows+=findRow('info','Cert SHA-1 thumbprint',`<code>${esc(tp['SHA-1']||'—')}</code>`,
         'This is what most SPs pin. Compare it against the tenant\'s active signing thumbprint on the Live tenant tab.');
       if(tp['SHA-256']) rows+=findRow('info','Cert SHA-256',`<code>${esc(tp['SHA-256'])}</code>`);
@@ -1170,7 +1249,7 @@ async function inspectSaml(){
       }
       rows+=findRow('na','Cryptographic check','not performed here',
         'Verifying an XML signature needs canonicalisation, which this page does not implement. Treat the thumbprint as a match check, not proof. The SP logs are the authority.');
-    } else rows+=findRow('warn','Certificate','not embedded','The SP must resolve the key from metadata, so no thumbprint comparison from here.');
+    } else if(!certNode) rows+=findRow('warn','Certificate','not embedded','The SP must resolve the key from metadata, so no thumbprint comparison from here.');
     html+=card('Signature',rows);
 
     const attrs=L(asrt,'Attribute'); states.claims=attrs.length?'pass':'warn';
@@ -1197,7 +1276,16 @@ async function inspectSaml(){
     info:'Decoded. Review below.',na:'Decoded.'}[worst];
   out.innerHTML=strip(segs,label)+html; animateStrip();
 }
-$('samlGo').addEventListener('click',inspectSaml);
+/* Backstop. inspectSaml is long and async, so anything it throws would
+   otherwise surface as an unhandled rejection with the previous assertion's
+   verdict still on screen, which reads as a current result. */
+$('samlGo').addEventListener('click',()=>{
+  inspectSaml().catch(e=>{
+    $('samlOut').innerHTML=card('Could not finish inspecting',
+      findRow('fail','Inspector',esc(`${e&&e.name||'Error'}: ${e&&e.message||e}`),
+        'This is a fault in the page, not a verdict on the assertion. The most common cause is a truncated paste. Re-copy the full value and try again.'));
+  });
+});
 $('samlClear').addEventListener('click',()=>{$('samlIn').value='';$('samlOut').innerHTML='';});
 $('samlXml').addEventListener('click',()=>{
   try{
@@ -1358,6 +1446,168 @@ $('errGo').addEventListener('click',()=>{
 $('errIn').addEventListener('keydown',e=>{ if(e.key==='Enter') $('errGo').click(); });
 
 initAuth();
+
+/* ==================== self test ====================
+   There is no build step and no test runner, so the regression checks live in
+   the page. Open index.html?selftest, or call selfTest() from the console.
+   Nothing here executes on a normal load. Every case below is a bug that
+   shipped once, so add to it when you fix something rather than checking by
+   hand. */
+async function selfTest(){
+  const results=[]; let fails=0, skips=0;
+  const eq =(got,want)=> got===want ? true : `got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`;
+  const has=(hay,re)=> re.test(hay) ? true : `expected to find ${re}`;
+  const not=(hay,re)=> re.test(hay) ? `did not expect ${re}` : true;
+  const t=async (name,fn)=>{
+    let got; try{ got=await fn(); }catch(e){ got=`threw ${e&&e.name||'Error'}: ${e&&e.message||e}`; }
+    const state = got===true ? 'pass'
+      : (typeof got==='string'&&got.startsWith('skip')) ? 'skip' : 'fail';
+    if(state==='fail') fails++; else if(state==='skip') skips++;
+    results.push([state,name,got===true?'ok':String(got)]);
+  };
+
+  /* The check CLAUDE.md asks for by hand: every $('id') must resolve. The page
+     reads its own inline script out of the DOM, so this needs no tooling. */
+  await t('every $(\'id\') literal resolves to an element', ()=>{
+    const src=Array.from(document.querySelectorAll('script')).map(s=>s.textContent).join('\n');
+    const ids=Array.from(new Set(Array.from(src.matchAll(/\$\('([A-Za-z0-9_-]+)'\)/g), m=>m[1])));
+    if(!ids.length) return 'found no $(\'id\') calls, so this check is not doing anything';
+    const missing=ids.filter(id=>!document.getElementById(id));
+    return missing.length ? `${missing.length} missing: ${missing.join(', ')}` : true;
+  });
+
+  /* ---- item 1: thumbprint encodings. Graph sends base64, the preferred-key
+     field is hex, PowerShell sends a byte array. ---- */
+  const bytes=Array.from({length:20},(_,i)=>i);
+  const hex=bytes.map(b=>b.toString(16).padStart(2,'0')).join('').toUpperCase();
+  const b64=btoa(String.fromCharCode.apply(null,bytes));
+  await t('thumbHex decodes base64 to hex',        ()=>eq(thumbHex(b64),hex));
+  await t('thumbHex passes hex through',           ()=>eq(thumbHex(hex),hex));
+  await t('thumbHex uppercases lowercase hex',     ()=>eq(thumbHex(hex.toLowerCase()),hex));
+  await t('thumbHex strips colons from hex',       ()=>eq(thumbHex(hex.match(/../g).join(':')),hex));
+  await t('thumbHex reads a PowerShell byte array',()=>eq(thumbHex(bytes),hex));
+  await t('thumbHex handles null and empty',       ()=>eq(thumbHex(null)+thumbHex(''),''));
+  await t('thumbHex does not throw on garbage',    ()=>eq(typeof thumbHex('!!! nope !!!'),'string'));
+
+  const spCert=(offsetDays,keyId,preferred)=>({displayName:'Test',appId:'a',id:'sp1',preferredSingleSignOnMode:'saml',
+    preferredTokenSigningKeyThumbprint:preferred===undefined?hex:preferred,
+    keyCredentials:[{usage:'Verify',type:'AsymmetricX509Cert',customKeyIdentifier:keyId===undefined?b64:keyId,
+      endDateTime:new Date(Date.now()+offsetDays*86400000).toISOString()}]});
+  await t('expired active certificate fails the cert segment', ()=>eq(analyseServicePrincipal(spCert(-30)).st.cert,'fail'));
+  await t('certificate inside 45 days warns',                  ()=>eq(analyseServicePrincipal(spCert(20)).st.cert,'warn'));
+  await t('healthy certificate passes',                        ()=>eq(analyseServicePrincipal(spCert(300)).st.cert,'pass'));
+  await t('active certificate is labelled as active',          ()=>has(analyseServicePrincipal(spCert(300)).certRows,/Active certificate/));
+  await t('displayed thumbprint is hex, never base64',         ()=>not(analyseServicePrincipal(spCert(300)).certRows,/<code>[A-Za-z0-9+/]{20,}={1,2}<\/code>/));
+  await t('unreported preferred key does not read as healthy', ()=>eq(analyseServicePrincipal(spCert(-30,undefined,'')).st.cert,'warn'));
+  await t('thumbprint mismatch does not read as healthy',      ()=>eq(analyseServicePrincipal(spCert(-30,btoa(String.fromCharCode.apply(null,Array(20).fill(171))))).st.cert,'warn'));
+
+  /* ---- item 2: group-inherited assignments ---- */
+  const spReq={id:'sp1',displayName:'Test',appRoleAssignmentRequired:true};
+  const asg=(list,ctx,sp)=>analyseAssignments(list,sp||spReq,ctx);
+  await t('assignment not required is not a finding',   ()=>eq(asg([],null,{id:'sp1',appRoleAssignmentRequired:false}).st.assigned,undefined));
+  await t('direct assignment passes',                   ()=>eq(asg([{resourceId:'sp1'}],null).st.assigned,'pass'));
+  await t('empty direct list alone never fails',        ()=>eq(asg([],null).st.assigned,'warn'));
+  await t('empty direct list explains group blindness', ()=>has(asg([],null).rows,/direct<\/b> assignments only/));
+  await t('group-inherited assignment passes',          ()=>eq(asg([],{userId:'u1',groupIds:['g1','g2'],assigned:new Set(['g2']),complete:true,truncated:false}).st.assigned,'pass'));
+  await t('service-principal-side direct match passes', ()=>eq(asg([],{userId:'u1',groupIds:[],assigned:new Set(['u1']),complete:true,truncated:false}).st.assigned,'pass'));
+  await t('genuinely unassigned user fails',            ()=>eq(asg([],{userId:'u1',groupIds:['g1'],assigned:new Set(['g9']),complete:true,truncated:false}).st.assigned,'fail'));
+  await t('only a complete check may cite AADSTS50105', ()=>not(asg([],{userId:'u1',groupIds:['g1'],assigned:new Set(['g9']),complete:false,truncated:true}).rows,/AADSTS50105/));
+  await t('truncated paging degrades to warn, not fail',()=>eq(asg([],{userId:'u1',groupIds:['g1'],assigned:new Set(['g9']),complete:false,truncated:true}).st.assigned,'warn'));
+
+  /* ---- item 3: a missing status is not a success ---- */
+  await t('real success is green',           ()=>has(analyseSignIns([{status:{errorCode:0}}]).rows,/<td class="st-pass">success<\/td>/));
+  await t('real failure is red',             ()=>has(analyseSignIns([{status:{errorCode:50105}}]).rows,/<td class="st-fail">AADSTS50105<\/td>/));
+  await t('missing status is not green',      ()=>not(analyseSignIns([{correlationId:'c'}]).rows,/st-pass/));
+  await t('missing status warns the segment', ()=>eq(analyseSignIns([{correlationId:'c'}]).st.signin,'warn'));
+  await t('a real failure outranks an unknown',()=>eq(analyseSignIns([{correlationId:'c'},{status:{errorCode:50105}}]).st.signin,'fail'));
+
+  /* ---- item 4: a truncated paste must not abort the inspector ---- */
+  const utc=s=>Array.from(s,c=>c.charCodeAt(0));
+  await t('certValidity reads a well-formed UTCTime pair', ()=>{
+    const v=certValidity(new Uint8Array([0x30,0x1E,0x17,0x0D,...utc('260812000000Z'),0x17,0x0D,...utc('290812000000Z'),...Array(33).fill(0)]));
+    if(!v) return 'returned null for a valid pair';
+    return v.from.toISOString().slice(0,10)==='2026-08-12'&&v.to.toISOString().slice(0,10)==='2029-08-12'
+      ? true : `read ${v.from.toISOString()} to ${v.to.toISOString()}`;
+  });
+  await t('certValidity never returns an Invalid Date', ()=>eq(
+    certValidity(new Uint8Array([0x30,0x1E,0x17,0x0D,...Array(13).fill(0x41),0x17,0x0D,...Array(13).fill(0x41),...Array(33).fill(0)])),null));
+
+  const samlFixture=cert=>`<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" Destination="https://sp.example/acs" IssueInstant="2026-08-12T00:00:00Z">
+<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
+<saml:Assertion><saml:Issuer>https://sts.windows.net/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/</saml:Issuer>
+<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:KeyInfo><ds:X509Data><ds:X509Certificate>${cert}</ds:X509Certificate></ds:X509Data></ds:KeyInfo></ds:Signature>
+<saml:Subject><saml:NameID>jdoe@example.org</saml:NameID></saml:Subject>
+<saml:Conditions NotBefore="2026-08-12T00:00:00Z" NotOnOrAfter="2026-08-12T01:00:00Z"><saml:AudienceRestriction><saml:Audience>https://sp.example</saml:Audience></saml:AudienceRestriction></saml:Conditions>
+</saml:Assertion></samlp:Response>`;
+  const inspect=async cert=>{
+    $('samlIn').value=samlFixture(cert);
+    $('samlOut').innerHTML='SENTINEL';
+    await inspectSaml();
+    return $('samlOut').innerHTML;
+  };
+  await t('truncated certificate still renders a verdict', async ()=>{
+    const h=await inspect('!!! not base64 !!!');
+    if(h==='SENTINEL') return 'panel left stale, user would read the previous assertion as current';
+    if(!/not decodable/.test(h)) return 'rendered but did not explain the bad certificate';
+    return has(h,/Audience/);
+  });
+  await t('truncated certificate does not also claim "not embedded"', async ()=>not(await inspect('!!! not base64 !!!'),/not embedded/));
+  await t('non-DER certificate bytes still render',   async ()=>not(await inspect(btoa('not a DER certificate')),/SENTINEL/));
+  await t('bogus date bytes still render',            async ()=>not(await inspect(btoa(String.fromCharCode.apply(null,[0x30,0x1E,0x17,0x0D,...Array(13).fill(0x41),0x17,0x0D,...Array(13).fill(0x41),...Array(33).fill(0)]))),/SENTINEL/));
+
+  /* ---- decoders ---- */
+  await t('decodeSaml detects raw XML',      ()=>eq(decodeSaml('<samlp:Response/>').how,'raw XML'));
+  await t('decodeSaml detects plain base64', ()=>has(decodeSaml(btoa('<samlp:Response/>')).how,/POST binding/));
+  await t('decodeSaml rejects empty input',  ()=>{ try{ decodeSaml('   '); return 'accepted empty input'; }catch(e){ return true; } });
+  await t('decodeSaml detects deflated base64', ()=>{
+    if(!window.pako) return 'skip: pako did not load, check the CDN script tag';
+    const z=pako.deflateRaw(new TextEncoder().encode('<samlp:AuthnRequest/>'));
+    let s=''; z.forEach(b=>s+=String.fromCharCode(b));
+    return has(decodeSaml(btoa(s)).how,/Redirect binding/);
+  });
+  const mkJwt=(h,b)=>[btoa(JSON.stringify(h)),btoa(JSON.stringify(b)),'sig'].map(x=>x.replace(/=+$/,'')).join('.');
+  await t('parseJwt rejects a two-segment token', ()=>{ try{ parseJwt('a.b'); return 'accepted it'; }catch(e){ return has(e.message,/three/); } });
+  await t('parseJwt reads the body',              ()=>eq(parseJwt(mkJwt({alg:'RS256'},{oid:'x'})).body.oid,'x'));
+  await t('parseJwt tolerates a Bearer prefix',   ()=>eq(parseJwt('Bearer '+mkJwt({alg:'RS256'},{oid:'y'})).body.oid,'y'));
+  await t('a Graph audience is called out',       ()=>{ $('jwtIn').value=mkJwt({alg:'RS256'},{iss:'https://sts.windows.net/x/',aud:'https://graph.microsoft.com'}); inspectJwt(); return has($('jwtOut').innerHTML,/not an identity token/); });
+
+  /* ---- shape detection, both modes share this engine ---- */
+  await t('paste mode recognises a service principal', ()=>{
+    $('pasteIn').value=JSON.stringify({'@odata.context':'x/$metadata#servicePrincipals',value:[spCert(300)]});
+    $('pasteGo').click();
+    return has($('liveOut').innerHTML,/Application configuration/);
+  });
+  await t('paste mode rejects an unrecognised shape', ()=>{
+    $('pasteIn').value=JSON.stringify({hello:'world'});
+    $('pasteGo').click();
+    return has($('liveOut').innerHTML,/Shape not recognised/);
+  });
+  await t('paste mode reports bad JSON instead of throwing', ()=>{
+    $('pasteIn').value='{not json';
+    $('pasteGo').click();
+    return has($('liveOut').innerHTML,/Could not parse/);
+  });
+
+  /* Leave no fixture behind in the inputs. */
+  ['samlIn','jwtIn','pasteIn'].forEach(id=>{ $(id).value=''; });
+  ['samlOut','jwtOut'].forEach(id=>{ $(id).innerHTML=''; });
+
+  const cls={pass:'st-pass',fail:'st-fail',skip:''};
+  const table='<div style="overflow-x:auto"><table class="claims"><thead><tr><th>Result</th><th>Check</th><th>Detail</th></tr></thead><tbody>'+
+    results.map(([s,n,d])=>`<tr><td class="${cls[s]}">${s.toUpperCase()}</td><td>${esc(n)}</td><td>${esc(d)}</td></tr>`).join('')+
+    '</tbody></table></div>';
+  const heading = fails
+    ? `Self test: ${fails} of ${results.length} FAILED`
+    : `Self test: ${results.length-skips} passed${skips?`, ${skips} skipped`:''}`;
+  $('pageTitle').textContent='Self test';
+  document.title=(fails?`${fails} FAILED`:'self test OK')+' | Federation Bench';
+  $('liveOut').innerHTML=strip([{tag:'test',state:fails?'fail':skips?'warn':'pass'}],
+    fails?'Do not deploy until these pass.':'All checks passed.')+card(heading,table);
+  animateStrip();
+  console[fails?'error':'log'](`self test: ${results.length-fails-skips} passed, ${fails} failed, ${skips} skipped`);
+  return {passed:results.length-fails-skips, failed:fails, skipped:skips, results};
+}
+if(/[?&]selftest(=|&|$)/.test(location.search)) selfTest();
 </script>
 </body>
 </html>
