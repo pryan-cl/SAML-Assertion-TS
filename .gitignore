@@ -1,2 +1,5 @@
 # Markdown files
 *.md
+
+# Local deploy script
+deploy.ps1
