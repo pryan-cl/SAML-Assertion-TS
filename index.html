@@ -940,11 +940,26 @@ function analyseAssignments(list, sp, ctx){
   if(!sp.appRoleAssignmentRequired) return {rows:findRow('na','Assignment check','not required',
     'The app allows any user in the tenant, so assignment is not the problem.'), st:{}};
 
-  const direct=(list||[]).find(a=> a.resourceId===sp.id || a.resourceDisplayName===sp.displayName);
-  if(direct) return {rows:findRow('pass','Assigned to app','yes, directly',
-    'Assignment is not the blocker.'), st:{assigned:'pass'}};
+  /* A hit here is not proof of a direct assignment. Observed against a live
+     tenant: /users/{id}/appRoleAssignments returned a group's assignment, with
+     principalType 'Group' and principalId set to the group rather than the
+     user. Reporting that as "directly" names the wrong object and sends the
+     reader to the wrong blade, so classify the hit by principalType instead of
+     assuming. Treat an absent principalType as direct, which is how the older
+     shape and most hand-pasted output look. */
+  const hit=(list||[]).find(a=> a.resourceId===sp.id || a.resourceDisplayName===sp.displayName);
+  if(hit){
+    const viaGroup = hit.principalType==='Group';
+    const who = hit.principalDisplayName||hit.principalId||'';
+    return {rows:findRow('pass','Assigned to app',
+      viaGroup ? `yes, through a group${who?` (<code>${esc(who)}</code>)`:''}` : 'yes, directly',
+      viaGroup
+        ? 'The user inherits the assignment from group membership rather than holding one of their own. Removing them from that group removes their access, which is not obvious from the app\'s Users and groups list.'
+        : 'Assignment is not the blocker.'),
+      st:{assigned:'pass'}};
+  }
 
-  /* No direct assignment. That is not the same as no assignment. */
+  /* Nothing on the user side. That is not the same as no assignment. */
   if(ctx&&ctx.complete){
     if(ctx.userId&&ctx.assigned.has(ctx.userId)) return {rows:findRow('pass','Assigned to app','yes, directly',
       'The app lists this user as an assigned principal.'), st:{assigned:'pass'}};

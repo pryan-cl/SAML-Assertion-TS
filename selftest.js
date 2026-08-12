@@ -72,6 +72,19 @@ async function selfTest(){
   const asg=(list,ctx,sp)=>analyseAssignments(list,sp||spReq,ctx);
   await t('assignment not required is not a finding',   ()=>eq(asg([],null,{id:'sp1',appRoleAssignmentRequired:false}).st.assigned,undefined));
   await t('direct assignment passes',                   ()=>eq(asg([{resourceId:'sp1'}],null).st.assigned,'pass'));
+  /* Observed live: the user-side list can carry a group's assignment, with
+     principalType 'Group'. Calling that "directly" names the wrong object. */
+  await t('a group-typed hit is not labelled as direct', ()=>{
+    const r=asg([{resourceId:'sp1',principalType:'Group',principalDisplayName:'GarbageTest'}],null);
+    if(r.st.assigned!=='pass') return `verdict ${r.st.assigned}, expected pass`;
+    if(/directly/.test(r.rows)) return 'reported a group assignment as direct';
+    if(!/GarbageTest/.test(r.rows)) return 'did not name the group';
+    return has(r.rows,/through a group/);
+  });
+  await t('a user-typed hit is still labelled as direct', ()=>
+    has(asg([{resourceId:'sp1',principalType:'User',principalDisplayName:'Jane'}],null).rows,/yes, directly/));
+  await t('a hit with no principalType is treated as direct', ()=>
+    has(asg([{resourceId:'sp1'}],null).rows,/yes, directly/));
   await t('empty direct list alone never fails',        ()=>eq(asg([],null).st.assigned,'warn'));
   await t('empty direct list explains group blindness', ()=>has(asg([],null).rows,/direct<\/b> assignments only/));
   await t('group-inherited assignment passes',          ()=>eq(asg([],{userId:'u1',groupIds:['g1','g2'],assigned:new Set(['g2']),complete:true,truncated:false}).st.assigned,'pass'));
