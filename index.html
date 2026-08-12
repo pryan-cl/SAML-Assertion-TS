@@ -1015,7 +1015,7 @@ async function assignmentContext(spId, userQ){
 function analyseSignIns(items){
   if(!items||!items.length) return {rows:findRow('na','Sign-in log','no matching entries',
     'Either the sign-in has not happened in the retained window, or the filter did not match. Entra ID Free tenants cannot serve this API at all.'), st:{}};
-  let worst='pass', unknown=0;
+  let worst='pass', unknown=0, wouldBlockCount=0;
   let t='<div style="overflow-x:auto"><table class="claims"><thead><tr><th>When (UTC)</th><th>Status</th><th>User</th><th>Detail</th><th>Correlation ID</th></tr></thead><tbody>';
   items.slice(0,15).forEach(s=>{
     /* An absent status object is not a success. Reading it as errorCode 0
@@ -1026,16 +1026,32 @@ function analyseSignIns(items){
     if(code===null){ unknown++; worst=roll([worst,'warn']); }
     else if(!ok) worst='fail';
     const ca=s.conditionalAccessStatus;
-    const pols=(s.appliedConditionalAccessPolicies||[])
-      .filter(p=>p.result==='failure').map(p=>p.displayName).join('; ');
+    const pol=s.appliedConditionalAccessPolicies||[];
+    const named=r=>pol.filter(p=>p.result===r).map(p=>p.displayName).filter(Boolean);
+    const blocked=named('failure');
+    /* Report-only policies are not enforced, so the sign-in succeeded and the
+       old filter on 'failure' alone rendered them as nothing at all. They are
+       the only advance warning that this sign-in stops working the moment
+       someone enforces the policy, which is exactly what you want to know
+       before a rollout rather than during one. */
+    const wouldBlock=named('reportOnlyFailure');
+    const wouldPrompt=named('reportOnlyInterrupted');
+    if(wouldBlock.length){ wouldBlockCount++; worst=roll([worst,'warn']); }
+    let detail=esc(((s.status&&s.status.failureReason)||'').slice(0,180));
+    if(ca&&ca!=='notApplied') detail+=`<br>CA: ${esc(ca)}`;
+    if(blocked.length) detail+=`<br>blocked by ${esc(blocked.join('; '))}`;
+    if(wouldBlock.length) detail+=`<br><b>report-only, would have blocked: ${esc(wouldBlock.join('; '))}</b>`;
+    if(wouldPrompt.length) detail+=`<br>report-only, would have interrupted: ${esc(wouldPrompt.join('; '))}`;
     t+=`<tr><td>${esc((s.createdDateTime||'').replace('T',' ').slice(0,19))}</td>`+
        `<td class="${code===null?'':ok?'st-pass':'st-fail'}">${code===null?'no status returned':ok?'success':'AADSTS'+code}</td>`+
        `<td>${esc(s.userPrincipalName||'')}</td>`+
-       `<td>${esc(((s.status&&s.status.failureReason)||'').slice(0,180))}${
-          ca&&ca!=='notApplied'?`<br>CA: ${esc(ca)}${pols?' — blocked by '+esc(pols):''}`:''}</td>`+
+       `<td>${detail}</td>`+
        `<td>${esc(s.correlationId||'')}</td></tr>`;
   });
   t+='</tbody></table></div>';
+  if(wouldBlockCount) t+=findRow('warn','Report-only policy',
+    `${wouldBlockCount} of the sign-ins above would have been blocked`,
+    'Those succeeded only because the policy is still in report-only mode. They stop working the day it is enforced, and nothing in the user-visible behaviour changes until then. This is the earliest warning available, so raise it before the rollout rather than after. Find the named policy under Conditional Access.');
   if(unknown) t+=findRow('warn','Incomplete entries',`${unknown} row(s) carry no status`,
     'Those rows are not successes, they are unreadable. A <code>$select</code> that omits <code>status</code>, or a hand-trimmed paste, produces this. Re-read them with the full object before drawing any conclusion.');
   t+=findRow(worst,'Escalation','Send the SP the correlation ID plus the UTC timestamp',

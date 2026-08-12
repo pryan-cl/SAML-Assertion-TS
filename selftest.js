@@ -201,6 +201,39 @@ async function selfTest(){
   await t('missing status warns the segment', ()=>eq(analyseSignIns([{correlationId:'c'}]).st.signin,'warn'));
   await t('a real failure outranks an unknown',()=>eq(analyseSignIns([{correlationId:'c'},{status:{errorCode:50105}}]).st.signin,'fail'));
 
+  /* Report-only Conditional Access. These sign-ins succeed, so the old filter
+     on result==='failure' rendered them as nothing, hiding the one signal that
+     predicts an outage before it happens. */
+  const ro=res=>[{status:{errorCode:0},correlationId:'c',conditionalAccessStatus:'reportOnly',
+    appliedConditionalAccessPolicies:[{result:res,displayName:'Block legacy auth'}]}];
+  await t('a report-only failure is surfaced, not filtered out', ()=>
+    has(analyseSignIns(ro('reportOnlyFailure')).rows,/would have blocked/));
+  await t('a report-only failure names the policy', ()=>
+    has(analyseSignIns(ro('reportOnlyFailure')).rows,/Block legacy auth/));
+  await t('a report-only failure warns the segment', ()=>
+    eq(analyseSignIns(ro('reportOnlyFailure')).st.signin,'warn'));
+  await t('a report-only failure does not fake a failed sign-in', ()=>{
+    const r=analyseSignIns(ro('reportOnlyFailure'));
+    return /st-fail/.test(r.rows) ? 'rendered the sign-in as failed when it succeeded' : has(r.rows,/st-pass/);
+  });
+  await t('a report-only failure adds a summary row', ()=>
+    has(analyseSignIns(ro('reportOnlyFailure')).rows,/1 of the sign-ins above would have been blocked/));
+  await t('a report-only interruption is surfaced separately', ()=>
+    has(analyseSignIns(ro('reportOnlyInterrupted')).rows,/would have interrupted/));
+  await t('a report-only success stays quiet', ()=>{
+    const r=analyseSignIns(ro('reportOnlySuccess'));
+    return /would have/.test(r.rows) ? 'warned about a policy that would have allowed it' : eq(r.st.signin,'pass');
+  });
+  await t('an enforced block still reads as blocked', ()=>{
+    const r=analyseSignIns([{status:{errorCode:53003},correlationId:'c',conditionalAccessStatus:'failure',
+      appliedConditionalAccessPolicies:[{result:'failure',displayName:'Require MFA'}]}]);
+    if(!/blocked by Require MFA/.test(r.rows)) return 'lost the enforced block label';
+    if(/would have/.test(r.rows)) return 'labelled an enforced block as report-only';
+    return eq(r.st.signin,'fail');
+  });
+  await t('an enforced failure outranks a report-only warning', ()=>eq(
+    analyseSignIns([...ro('reportOnlyFailure'),{status:{errorCode:53003}}]).st.signin,'fail'));
+
   /* ---- item 4: a truncated paste must not abort the inspector ---- */
   const utc=s=>Array.from(s,c=>c.charCodeAt(0));
   await t('certValidity reads a well-formed UTCTime pair', ()=>{
