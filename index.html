@@ -1466,12 +1466,16 @@ async function selfTest(){
     results.push([state,name,got===true?'ok':String(got)]);
   };
 
-  /* The check CLAUDE.md asks for by hand: every $('id') must resolve. The page
-     reads its own inline script out of the DOM, so this needs no tooling. */
-  await t('every $(\'id\') literal resolves to an element', ()=>{
-    const src=Array.from(document.querySelectorAll('script')).map(s=>s.textContent).join('\n');
+  /* The check CLAUDE.md asks for by hand: every element lookup in the script
+     must resolve after a markup change. The page reads its own inline script
+     out of the DOM, so this needs no tooling. Only the application code is
+     scanned, because the block below names lookups inside its own strings and
+     would otherwise match itself. */
+  await t('every element lookup resolves to a real element', ()=>{
+    const src=Array.from(document.querySelectorAll('script')).map(s=>s.textContent).join('\n')
+      .split('==================== self test')[0];
     const ids=Array.from(new Set(Array.from(src.matchAll(/\$\('([A-Za-z0-9_-]+)'\)/g), m=>m[1])));
-    if(!ids.length) return 'found no $(\'id\') calls, so this check is not doing anything';
+    if(ids.length<20) return `only found ${ids.length} lookups, so this check has stopped working`;
     const missing=ids.filter(id=>!document.getElementById(id));
     return missing.length ? `${missing.length} missing: ${missing.join(', ')}` : true;
   });
