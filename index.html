@@ -5,17 +5,38 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Federation Bench — Entra ID to third-party SSO diagnostics</title>
 <meta name="description" content="Client-side diagnostics for SAML assertions, OIDC tokens, AADSTS errors, and live read-only Entra ID tenant configuration checks.">
+<!-- The page promises that nothing leaves the browser. This is what enforces it.
+     connect-src is the load-bearing line: it stops any injected or compromised
+     script from posting a pasted assertion anywhere. 'unsafe-inline' is forced by
+     the single-file design, so script-src is weaker than it looks; the origin
+     allowlist still limits what can be pulled in. frame-src is for MSAL's hidden
+     silent-renewal iframe. frame-ancestors is deliberately absent because it is
+     ignored in a meta tag, and GitHub Pages cannot send headers. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src https://graph.microsoft.com https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; base-uri 'none'; form-action 'none'">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3/lib/msal-browser.min.js"></script>
+<!-- Pinned to exact versions with integrity hashes. A floating range cannot be
+     hashed, and this page handles live bearer tokens, so a CDN serving different
+     bytes than these must fail closed rather than run. Bumping a version means
+     recomputing the hash; the page will refuse to load the script otherwise. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"
+        integrity="sha384-rNlaE5fs9dGIjmxWDALQh/RBAaGRYT5ChrzHo6tRfgrZ36iRFAiquP5g41Jsv+0j"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.30.0/lib/msal-browser.min.js"
+        integrity="sha384-YnOjsoOxSYo65h1BXWnSq24bFbqW8HfzMWSEQxYEMRmjW9Vl1J3HZI3iZxqNYvIi"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
 :root{
   /* PowerTools .dark.style-polished, verbatim */
   --bg:#0c0f14;
   --card-base:#141820;
-  --card:color-mix(in srgb, #141820, var(--accent) 5%);
+  /* Flat equivalents of the color-mix values, overridden in the @supports block
+     below. A custom property holding an unsupported function fails at
+     computed-value time rather than parse time, so var(--card) would resolve to
+     nothing and card backgrounds would go transparent. Districts run old
+     Chromebook images, so this needs a real fallback, not a wish. */
+  --card:#161d2b;
   --muted:#151a22;
   --elevated:#1e2736;
   --border:#1e2736;
@@ -43,10 +64,19 @@
   --f-mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
   /* aliases for generated markup */
   --card-2:var(--muted); --sunken:var(--bg); --border-soft:var(--border);
-  --accent-soft:color-mix(in srgb, var(--card), var(--accent) 14%);
-  --accent-line:color-mix(in srgb, var(--card), var(--accent) 40%);
+  --accent-soft:#1b2b47;
+  --accent-line:#25457c;
   --bg-side:var(--card); --bg-top:var(--bg);
   --panel-edge:var(--border); --readout:var(--card); --ink:var(--text); --ink-soft:var(--dim); --ultra:var(--accent);
+}
+/* The portal values, verbatim, wherever color-mix is available. The flat hexes
+   above are computed from these, so the two agree to within a rounding step. */
+@supports (color: color-mix(in srgb, red, blue)){
+  :root{
+    --card:color-mix(in srgb, #141820, var(--accent) 5%);
+    --accent-soft:color-mix(in srgb, var(--card), var(--accent) 14%);
+    --accent-line:color-mix(in srgb, var(--card), var(--accent) 40%);
+  }
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -58,6 +88,10 @@ a{color:var(--accent)}
 /* ---------- shell ---------- */
 .shell{display:flex;min-height:100vh}
 .sidebar{width:238px;flex:0 0 238px;
+  /* Two declarations on purpose. color-mix inside a gradient is invalid at parse
+     time on an unsupporting browser, so the first survives and the sidebar keeps
+     a gradient instead of collapsing to nothing. */
+  background:linear-gradient(176deg,#1d2f50 0%,#163e45 100%);
   background:linear-gradient(176deg,
     color-mix(in srgb, var(--accent) var(--sidebar-top), var(--card)) 0%,
     color-mix(in srgb, var(--accent2) var(--sidebar-bottom), var(--card)) 100%);border-right:1px solid var(--border-soft);
@@ -532,7 +566,17 @@ function saveCfg(){
 }
 
 const $ = id => document.getElementById(id);
-const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+/* Covers ' and ` as well as the obvious four. Neither is exploitable at the
+   current call sites, which never build a single-quoted attribute, but the next
+   one might, and this costs nothing. */
+const esc = s => String(s).replace(/[&<>"'`]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]));
+
+/* CONTRACT: key is escaped here. value and note are inserted as raw HTML,
+   because nearly every caller passes markup, so every caller is responsible for
+   running esc() over anything that came from a tenant, a token, or a paste. The
+   self test feeds hostile strings through the analysers to catch a call site
+   that forgets. */
 function findRow(state, key, value, note){
   return `<div class="find"><div class="dot" data-state="${state}">${
     {pass:'OK',warn:'!',fail:'\u00d7',info:'\u2022',na:'\u2013'}[state]
@@ -546,6 +590,39 @@ const animateStrip = () =>
   document.querySelectorAll('#stripNode .seg').forEach((s,i)=>setTimeout(()=>s.classList.add('in'), i*45));
 const WORST = ['na','info','pass','warn','fail'];
 const roll = l => l.reduce((a,b)=> WORST.indexOf(b)>WORST.indexOf(a)?b:a,'na');
+
+/* The Microsoft.Graph PowerShell SDK serialises property names in PascalCase
+   (DisplayName, AppId), while Graph's own JSON is camelCase. The Setup tab tells
+   people to run ConvertTo-Json, so both shapes arrive in the paste box.
+   Lowercasing the first character normalises PascalCase and is a no-op for
+   camelCase and for @odata.* keys. */
+function camelKeys(v, depth){
+  depth=depth||0;
+  if(depth>12||v===null||typeof v!=='object') return v;
+  if(Array.isArray(v)) return v.map(x=>camelKeys(x,depth+1));
+  const out={}, keys=Object.keys(v);
+  /* Genuine camelCase keys are copied first and win, so an object carrying both
+     spellings never silently loses the real one. */
+  keys.filter(k=>!/^[A-Z]/.test(k)).forEach(k=>{ out[k]=camelKeys(v[k],depth+1); });
+  keys.filter(k=>/^[A-Z]/.test(k)).forEach(k=>{
+    const nk=k[0].toLowerCase()+k.slice(1);
+    if(!(nk in out)) out[nk]=camelKeys(v[k],depth+1);
+  });
+  return out;
+}
+
+/* A multi-megabyte paste builds enormous HTML strings synchronously and freezes
+   the tab with no way back. Refuse it with an explanation instead. Real
+   assertions and Graph responses are orders of magnitude under this. */
+const MAX_INPUT=2000000;
+function oversize(inId, outId, label){
+  const n=$(inId).value.length;
+  if(n<=MAX_INPUT) return false;
+  $(outId).innerHTML=card('Input too large',findRow('warn','Size',
+    `${(n/1048576).toFixed(1)} MB pasted, limit ${(MAX_INPUT/1048576).toFixed(0)} MB`,
+    `That is far larger than any real ${label}. Rendering it would freeze this tab. Paste one response at a time, and check you did not paste an entire page instead of a single value.`));
+  return true;
+}
 function ago(ms){const s=Math.round(Math.abs(ms)/1000);
   if(s<90)return s+'s'; if(s<5400)return Math.round(s/60)+'m'; return (s/3600).toFixed(1)+'h';}
 function windowState(nb,noa,now){
@@ -1086,8 +1163,9 @@ document.querySelectorAll('[data-ge]').forEach(btn=>{
 });
 
 $('pasteGo').addEventListener('click',()=>{
+  if(oversize('pasteIn','liveOut','Graph response')) return;
   let j;
-  try{ j=JSON.parse($('pasteIn').value); }
+  try{ j=camelKeys(JSON.parse($('pasteIn').value)); }
   catch(e){
     $('liveOut').innerHTML=card('Could not parse',findRow('fail','JSON',esc(e.message),
       'Paste the whole response including the outer braces. PowerShell needs <code>ConvertTo-Json -Depth 5</code> or nested values come out as type names.'));
@@ -1175,6 +1253,7 @@ function certValidity(der){
   return null;
 }
 async function inspectSaml(){
+  if(oversize('samlIn','samlOut','SAML message')) return;
   const out=$('samlOut'); let xml,how;
   try{ ({xml,how}=decodeSaml($('samlIn').value)); }
   catch(e){ out.innerHTML=card('Could not decode',findRow('fail','Decoder',esc(e.message))); return; }
@@ -1339,6 +1418,7 @@ $('samlGo').addEventListener('click',()=>{
 });
 $('samlClear').addEventListener('click',()=>{$('samlIn').value='';$('samlOut').innerHTML='';});
 $('samlXml').addEventListener('click',()=>{
+  if(oversize('samlIn','samlOut','SAML message')) return;
   try{
     const {xml}=decodeSaml($('samlIn').value);
     $('samlOut').innerHTML=card('Decoded XML',
@@ -1354,6 +1434,7 @@ function parseJwt(raw){
   return {head:JSON.parse(dec.decode(b64bytes(p[0]))), body:JSON.parse(dec.decode(b64bytes(p[1]))), parts:p};
 }
 function inspectJwt(){
+  if(oversize('jwtIn','jwtOut','token')) return;
   let j;
   try{ j=parseJwt($('jwtIn').value); }
   catch(e){ $('jwtOut').innerHTML=card('Could not decode',findRow('fail','Decoder',esc(e.message))); return; }
@@ -1429,6 +1510,7 @@ function inspectJwt(){
   $('jwtOut').innerHTML=strip(segs,label)+html; animateStrip();
 }
 async function verifyJwt(){
+  if(oversize('jwtIn','jwtOut','token')) return;
   const btn=$('jwtVerify'); let j;
   try{ j=parseJwt($('jwtIn').value); }
   catch(e){ $('jwtOut').innerHTML=card('Could not decode',findRow('fail','Decoder',esc(e.message))); return; }
@@ -1711,6 +1793,168 @@ async function selfTest(){
       keyCredentials:[{type:'AsymmetricX509Cert',customKeyIdentifier:b64,
         endDateTime:new Date(Date.now()+300*86400000).toISOString()}]};
     return has(analyseServicePrincipal(sp).certRows,/Active certificate/);
+  });
+
+  /* ---- item 8: supply chain ---- */
+  await t('every CDN script carries an integrity hash and crossorigin', ()=>{
+    const bad=Array.from(document.querySelectorAll('script[src]'))
+      .filter(s=>!s.getAttribute('integrity')||!s.getAttribute('crossorigin'))
+      .map(s=>s.getAttribute('src'));
+    return bad.length?`unprotected: ${bad.join(', ')}`:true;
+  });
+  await t('no CDN script uses a floating version range', ()=>{
+    const bad=Array.from(document.querySelectorAll('script[src]'))
+      .filter(s=>!/\d+\.\d+\.\d+/.test(s.getAttribute('src')))
+      .map(s=>s.getAttribute('src'));
+    return bad.length?`floating: ${bad.join(', ')}`:true;
+  });
+  await t('both third-party libraries actually loaded under SRI', ()=>{
+    const missing=[];
+    if(typeof pako==='undefined') missing.push('pako');
+    if(typeof msal==='undefined') missing.push('msal');
+    return missing.length?`did not load, so a hash may be stale: ${missing.join(', ')}`:true;
+  });
+
+  /* ---- item 9: CSP ---- */
+  await t('a CSP is declared and locks down where data can go', ()=>{
+    const m=document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+    if(!m) return 'no CSP meta tag';
+    const c=m.getAttribute('content')||'';
+    if(!/default-src 'none'/.test(c)) return 'default-src is not none';
+    if(/connect-src[^;]*[* ]\*/.test(c)) return 'connect-src allows a wildcard';
+    if(!/connect-src[^;]*graph\.microsoft\.com/.test(c)) return 'connect-src omits Graph';
+    if(!/connect-src[^;]*login\.microsoftonline\.com/.test(c)) return 'connect-src omits the login endpoint';
+    return has(c,/frame-src[^;]*login\.microsoftonline\.com/);
+  });
+
+  /* ---- item 11: nothing from a tenant may reach the DOM unescaped ---- */
+  await t('esc covers all six characters', ()=>eq(esc('&<>"\'`'),'&amp;&lt;&gt;&quot;&#39;&#96;'));
+  await t('a hostile display name cannot inject markup', ()=>{
+    const evil='<img src=x onerror="alert(1)">';
+    const r=analyseServicePrincipal({displayName:evil,appId:evil,id:evil,loginUrl:evil,
+      servicePrincipalNames:[evil],replyUrls:[evil],notificationEmailAddresses:[evil]});
+    const all=r.rows+r.certRows;
+    if(all.includes(evil)) return 'inserted the hostile string verbatim';
+    return has(all,/&lt;img/);
+  });
+  await t('a hostile user object cannot inject markup', ()=>{
+    /* The slash is escaped so this string cannot close the enclosing script
+       element. Writing it raw truncates the whole page's JavaScript. */
+    const evil='<script>x<\/script>';
+    const r=analyseUser({userPrincipalName:evil,mail:evil,displayName:evil,proxyAddresses:[evil],
+      onPremisesSyncEnabled:true,onPremisesImmutableId:evil,onPremisesSamAccountName:evil});
+    if(r.rows.includes(evil)) return 'inserted the hostile string verbatim';
+    return has(r.rows,/&lt;script/);
+  });
+  await t('a hostile sign-in log entry cannot inject markup', ()=>{
+    const evil='<b onclick="x">';
+    const r=analyseSignIns([{status:{errorCode:1,failureReason:evil},userPrincipalName:evil,
+      correlationId:evil,createdDateTime:evil,conditionalAccessStatus:evil,
+      appliedConditionalAccessPolicies:[{result:'failure',displayName:evil}]}]);
+    if(r.rows.includes(evil)) return 'inserted the hostile string verbatim';
+    return has(r.rows,/&lt;b/);
+  });
+  await t('a hostile assignment group id cannot inject markup', ()=>{
+    const evil='<i>x</i>';
+    const r=analyseAssignments([],{id:'sp1',displayName:'T',appRoleAssignmentRequired:true},
+      {userId:'u1',groupIds:[evil],assigned:new Set([evil]),complete:true,truncated:false});
+    return r.rows.includes(evil)?'inserted the hostile string verbatim':has(r.rows,/&lt;i&gt;/);
+  });
+
+  /* ---- item 12: PowerShell PascalCase ---- */
+  await t('camelKeys normalises PascalCase', ()=>eq(camelKeys({DisplayName:'x'}).displayName,'x'));
+  await t('camelKeys leaves camelCase and @odata keys alone', ()=>{
+    const n=camelKeys({'@odata.context':'c',appId:'a',nested:{userPrincipalName:'u'}});
+    return n['@odata.context']==='c'&&n.appId==='a'&&n.nested.userPrincipalName==='u'?true:JSON.stringify(n);
+  });
+  await t('camelKeys prefers a genuine camelCase key', ()=>eq(camelKeys({Id:'pascal',id:'camel'}).id,'camel'));
+  await t('camelKeys recurses through arrays', ()=>eq(camelKeys({V:[{AppId:'a'}]}).v[0].appId,'a'));
+  await t('a PowerShell service principal analyses correctly end to end', ()=>{
+    const ps={DisplayName:'ClassLink',AppId:'a',Id:'sp1',PreferredSingleSignOnMode:'saml',
+      AppRoleAssignmentRequired:true,PreferredTokenSigningKeyThumbprint:hex,
+      KeyCredentials:[{Usage:'Verify',Type:'AsymmetricX509Cert',CustomKeyIdentifier:bytes,
+        EndDateTime:new Date(Date.now()-30*86400000).toISOString()}]};
+    const r=analyseServicePrincipal(camelKeys(ps));
+    if(r.st.sso!=='pass') return `sso read as ${r.st.sso}`;
+    /* PascalCase keys plus a byte-array thumbprint plus an expired cert. */
+    return eq(r.st.cert,'fail');
+  });
+  await t('paste mode recognises PowerShell output', ()=>{
+    $('pasteIn').value=JSON.stringify({DisplayName:'ClassLink',AppId:'a',Id:'sp1',
+      PreferredSingleSignOnMode:'saml',ServicePrincipalNames:['https://x'],KeyCredentials:[]});
+    $('pasteGo').click();
+    const okNow=/Application configuration/.test($('liveOut').innerHTML);
+    clearPasted();
+    return okNow?true:'shape not recognised';
+  });
+
+  /* ---- item 14: the flat fallbacks must match the color-mix values ---- */
+  await t('flat colour fallbacks match their color-mix equivalents', ()=>{
+    const probe=document.createElement('div'); document.body.appendChild(probe);
+    /* A hex resolves to rgb(), but color-mix resolves to color(srgb 0.086 ...),
+       so both forms have to be parsed. Scraping digits reads the decimals as
+       integers and produces nonsense. */
+    const read=v=>{
+      probe.style.background=''; probe.style.background=v;
+      const s=getComputedStyle(probe).backgroundColor;
+      let m=s.match(/^rgba?\(([^)]+)\)/);
+      if(m) return m[1].split(/[\s,\/]+/).filter(Boolean).slice(0,3).map(Number);
+      m=s.match(/^color\(srgb\s+([^)]+)\)/);
+      if(m) return m[1].trim().split(/[\s\/]+/).filter(Boolean).slice(0,3).map(x=>Math.round(parseFloat(x)*255));
+      return [];
+    };
+    const pairs=[
+      ['color-mix(in srgb, #141820, #3b82f6 5%)','#161d2b','--card'],
+      ['color-mix(in srgb, #161d2b, #3b82f6 14%)','#1b2b47','--accent-soft'],
+      ['color-mix(in srgb, #161d2b, #3b82f6 40%)','#25457c','--accent-line'],
+      ['color-mix(in srgb, #3b82f6 18%, #161d2b)','#1d2f50','sidebar top'],
+      ['color-mix(in srgb, #14b8a6 21%, #161d2b)','#163e45','sidebar bottom'],
+    ];
+    const bad=[];
+    pairs.forEach(([mix,flat,name])=>{
+      const a=read(mix), b=read(flat);
+      if(a.length<3||b.length<3){ bad.push(`${name}: did not resolve`); return; }
+      const d=Math.max(...a.map((x,i)=>Math.abs(x-b[i])));
+      if(d>3) bad.push(`${name}: fallback ${flat} is ${d} off (${a} vs ${b})`);
+    });
+    probe.remove();
+    return bad.length?bad.join('; '):true;
+  });
+  await t('the card token resolves to a paintable colour', ()=>{
+    const probe=document.createElement('div');
+    probe.style.background='var(--card)'; document.body.appendChild(probe);
+    const bg=getComputedStyle(probe).backgroundColor; probe.remove();
+    return bg&&bg!=='rgba(0, 0, 0, 0)'&&bg!=='transparent'?true:`resolved to ${bg}`;
+  });
+
+  /* ---- item 15: oversized input ---- */
+  await t('an oversized paste is refused, not rendered', ()=>{
+    $('pasteIn').value='x'.repeat(MAX_INPUT+1);
+    $('pasteGo').click();
+    const okNow=/Input too large/.test($('liveOut').innerHTML);
+    clearPasted();
+    return okNow?true:'accepted an oversized paste';
+  });
+  await t('an oversized SAML message is refused', async ()=>{
+    $('samlIn').value='x'.repeat(MAX_INPUT+1);
+    await inspectSaml();
+    const okNow=/Input too large/.test($('samlOut').innerHTML);
+    $('samlIn').value=''; $('samlOut').innerHTML='';
+    return okNow?true:'accepted an oversized assertion';
+  });
+  await t('an oversized token is refused', ()=>{
+    $('jwtIn').value='x'.repeat(MAX_INPUT+1);
+    inspectJwt();
+    const okNow=/Input too large/.test($('jwtOut').innerHTML);
+    $('jwtIn').value=''; $('jwtOut').innerHTML='';
+    return okNow?true:'accepted an oversized token';
+  });
+  await t('normal-sized input is not refused', ()=>{
+    $('pasteIn').value=JSON.stringify({hello:'world'});
+    $('pasteGo').click();
+    const refused=/Input too large/.test($('liveOut').innerHTML);
+    clearPasted();
+    return refused?'refused a tiny paste':true;
   });
 
   /* ---- shape detection, both modes share this engine ---- */
