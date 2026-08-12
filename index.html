@@ -564,6 +564,18 @@ function b64bytes(s){
 const dec=new TextDecoder('utf-8');
 const dt = s => { const d=new Date(s); return isNaN(d)?null:d; };
 const daysLeft = d => (d - Date.now())/86400000;
+const GUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/* Built as a function so the self test can assert the encoding. The filter
+   needs OData quote doubling and percent-encoding: without the second, an app
+   name containing & truncates the filter and injects a query parameter, and
+   one containing # discards the rest of the URL. */
+function spQuery(appQ, select){
+  const byId=GUID_RE.test(appQ);
+  const filter = byId ? `appId eq '${appQ}'`
+                      : `startswith(displayName,'${appQ.replace(/'/g,"''")}')`;
+  return `/servicePrincipals?$filter=${encodeURIComponent(filter)}&$select=${select}${byId?'':'&$top=10'}`;
+}
 
 /* Certificate thumbprints arrive in three different shapes and have to be
    compared against each other. Graph sends keyCredentials[].customKeyIdentifier
@@ -631,18 +643,30 @@ async function buildAuth(){
     return;
   }
   $('modeHint').textContent='Read-only, delegated, expires with this tab';
-  msalApp = new msal.PublicClientApplication({
-    auth:{
-      clientId,
-      authority:'https://login.microsoftonline.com/'+(tenantId||'organizations'),
-      redirectUri:location.origin+location.pathname
-    },
-    cache:{cacheLocation:'sessionStorage', storeAuthStateInCookie:false}
-  });
-  await msalApp.initialize();
-  const r = await msalApp.handleRedirectPromise();
-  if(r&&r.account) account=r.account;
-  else { const a=msalApp.getAllAccounts(); if(a.length) account=a[0]; }
+  /* A rejection from initialize() or handleRedirectPromise() used to escape as
+     an unhandled rejection, skipping paintSession(). The button stayed live
+     against a half-built instance and the panel still read "Not signed in". */
+  try{
+    msalApp = new msal.PublicClientApplication({
+      auth:{
+        clientId,
+        authority:'https://login.microsoftonline.com/'+(tenantId||'organizations'),
+        redirectUri:location.origin+location.pathname
+      },
+      cache:{cacheLocation:'sessionStorage', storeAuthStateInCookie:false}
+    });
+    await msalApp.initialize();
+    const r = await msalApp.handleRedirectPromise();
+    if(r&&r.account) account=r.account;
+    else { const a=msalApp.getAllAccounts(); if(a.length) account=a[0]; }
+  }catch(e){
+    msalApp=null; account=null;
+    $('signIn').disabled=true;
+    $('modeHint').textContent='Sign-in unavailable';
+    $('who').innerHTML='MSAL could not start: <b>'+esc(e&&e.message||e)+'</b>. Check that the client ID is a real application ID and that the tenant ID resolves. Paste mode is unaffected.';
+    setPill(false,'Sign-in unavailable');
+    return;
+  }
   paintSession();
 }
 function setPill(live, label){
@@ -665,6 +689,7 @@ function paintSession(){
     : NOT_SIGNED;
 }
 $('signIn').addEventListener('click', async ()=>{
+  if(!msalApp){ $('who').textContent='Sign-in is not available. Re-check the client ID, or use pasted output.'; return; }
   try{
     const r = await msalApp.loginPopup({scopes:SCOPES, prompt:'select_account'});
     account=r.account; paintSession();
@@ -676,8 +701,15 @@ $('signIn').addEventListener('click', async ()=>{
   }
 });
 $('signOut').addEventListener('click', async ()=>{
-  const a=account; account=null; paintSession(); $('liveOut').innerHTML='';
-  try{ sessionStorage.clear(); await msalApp.logoutPopup({account:a}); }catch(e){}
+  const a=account; account=null; paintSession();
+  /* "End session" implies the district's data is gone, so clear what holds it:
+     the pasted payload, the in-memory service principal, and the query fields,
+     which include a user principal name. The SAML and JWT tabs are independent
+     of the tenant session and keep their own Clear buttons. */
+  clearPasted();
+  $('qApp').value=''; $('qUser').value='';
+  $('geNote').textContent='Placeholders are filled from the two fields above.';
+  try{ sessionStorage.clear(); if(msalApp) await msalApp.logoutPopup({account:a}); }catch(e){}
 });
 async function token(){
   try{ return (await msalApp.acquireTokenSilent({scopes:SCOPES, account})).accessToken; }
@@ -738,7 +770,11 @@ function analyseServicePrincipal(sp){
     rows+=findRow('warn','Token encryption','enabled',
       'Assertions are encrypted, so they cannot be read from a browser capture. Turn it off for the duration of a test, or work from the SP logs.');
 
-  const certs=(sp.keyCredentials||[]).filter(k=>k.usage==='Verify'||k.type==='AsymmetricX509Cert');
+  /* Token-encryption certificates also carry type AsymmetricX509Cert, so the
+     old || listed them under signing certificates. Exclude Encrypt explicitly
+     rather than requiring both fields, since usage is the reliable one. */
+  const certs=(sp.keyCredentials||[]).filter(k=>
+    k.usage!=='Encrypt' && (k.usage==='Verify'||k.type==='AsymmetricX509Cert'));
   const active=thumbHex(sp.preferredTokenSigningKeyThumbprint);
   let certRows='';
   if(!certs.length){
@@ -934,7 +970,6 @@ $('runChecks').addEventListener('click', async ()=>{
   const btn=$('runChecks'); btn.disabled=true; btn.textContent='Reading…';
   const parts={}; let errors='';
   const appQ=$('qApp').value.trim(), userQ=$('qUser').value.trim();
-  const GUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const SEL='id,appId,displayName,accountEnabled,preferredSingleSignOnMode,appRoleAssignmentRequired,'+
     'preferredTokenSigningKeyThumbprint,notificationEmailAddresses,replyUrls,servicePrincipalNames,loginUrl,'+
     'tokenEncryptionKeyId,keyCredentials';
@@ -942,10 +977,7 @@ $('runChecks').addEventListener('click', async ()=>{
 
   if(appQ){
     try{
-      const q = GUID.test(appQ)
-        ? `/servicePrincipals?$filter=appId eq '${appQ}'&$select=${SEL}`
-        : `/servicePrincipals?$filter=startswith(displayName,'${appQ.replace(/'/g,"''")}')&$select=${SEL}&$top=10`;
-      const list=(await g(q)).value||[];
+      const list=(await g(spQuery(appQ, SEL))).value||[];
       if(!list.length) errors+=findRow('fail','Application',`no match for <code>${esc(appQ)}</code>`,
         'Check the display name under Enterprise applications. Names are often suffixed, like "ClassLink SSO" or "ClassLink - Staff".');
       else{
@@ -1000,40 +1032,59 @@ $('pasteMode').addEventListener('click',()=>{
   const p=$('pastePanel'); p.classList.toggle('hidden');
   $('pasteMode').textContent = p.classList.contains('hidden')?'Use pasted output instead':'Hide paste panel';
 });
-$('pasteClear').addEventListener('click',()=>{ $('pasteIn').value=''; $('liveOut').innerHTML=''; });
+/* Holds the pasted service principal so the assignment check can compare
+   against it. Declared here, above the handlers that clear it. */
+let pastedSp=null;
+
+/* Clearing has to drop pastedSp too. Leaving it set let one district's app
+   configuration be compared against the next district's assignments. */
+function clearPasted(){ pastedSp=null; $('pasteIn').value=''; $('liveOut').innerHTML=''; }
+$('pasteClear').addEventListener('click',clearPasted);
 
 /* Hand a query off to Graph Explorer. The Share button's URL format is
    not a documented API, so the deep link is best effort and the
    clipboard copy is the part that is guaranteed to work. */
 const GE_BASE='https://developer.microsoft.com/en-us/graph/graph-explorer';
 document.querySelectorAll('[data-ge]').forEach(btn=>{
-  btn.addEventListener('click', async ()=>{
+  btn.addEventListener('click', ()=>{
     const app=$('qApp').value.trim(), user=$('qUser').value.trim();
-    const GUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    let path=btn.dataset.ge
+    const path=btn.dataset.ge
       .replace(/APP_NAME/g, app.replace(/'/g,"''") || 'APP_NAME')
-      .replace(/APP_GUID/g, GUID.test(app)?app:'APP_GUID')
+      .replace(/APP_GUID/g, GUID_RE.test(app)?app:'APP_GUID')
       .replace(/USER/g, user?encodeURIComponent(user):'USER');
     const full='https://graph.microsoft.com/v1.0'+path;
-    let copied=false;
-    try{ await navigator.clipboard.writeText(full); copied=true; }catch(e){}
-    const note=$('geNote');
     const left=[];
     if(/APP_NAME|APP_GUID/.test(path)) left.push('application');
     if(/\bUSER\b/.test(path)) left.push('user');
-    note.innerHTML = (copied?'Copied. ':'Copy failed, so paste from the box below. ')+
-      (left.length?`Fill in the <b>${left.join('</b> and <b>')}</b> placeholder before running it.`
-                 :'Paste it into the request bar and Run query.');
-    if(!copied){
-      $('liveOut').innerHTML=card('Query to run in Graph Explorer',
-        `<div style="padding:13px"><pre class="mono" style="margin:0;white-space:pre-wrap">${esc(full)}</pre></div>`);
-    }
-    window.open(GE_BASE+'?request='+encodeURIComponent(path.replace(/^\//,''))+'&method=GET&version=v1.0',
+    const tail = left.length
+      ? `Fill in the <b>${left.join('</b> and <b>')}</b> placeholder before running it.`
+      : 'Paste it into the request bar and Run query.';
+
+    /* Open before awaiting anything. A window.open that runs after an await is
+       no longer attributed to the click, so the popup blocker drops it and the
+       discarded return value made that invisible. */
+    const win=window.open(GE_BASE+'?request='+encodeURIComponent(path.replace(/^\//,''))+'&method=GET&version=v1.0',
       '_blank','noopener');
+    const blocked=!win;
+
+    const showQuery=()=>{ $('liveOut').innerHTML=card('Query to run in Graph Explorer',
+      `<div style="padding:13px"><pre class="mono" style="margin:0;white-space:pre-wrap">${esc(full)}</pre></div>`); };
+    const paint=first=>{
+      const bits=[first];
+      if(blocked) bits.push('Graph Explorer did not open, so the popup was blocked.');
+      bits.push(tail);
+      $('geNote').innerHTML=bits.join(' ');
+    };
+    if(blocked) showQuery();
+
+    const copy = (navigator.clipboard&&navigator.clipboard.writeText)
+      ? navigator.clipboard.writeText(full)
+      : Promise.reject(new Error('clipboard unavailable'));
+    copy.then(()=>paint('Copied.'))
+        .catch(()=>{ paint('Copy failed, so use the query below.'); showQuery(); });
   });
 });
 
-let pastedSp=null;
 $('pasteGo').addEventListener('click',()=>{
   let j;
   try{ j=JSON.parse($('pasteIn').value); }
@@ -1575,6 +1626,93 @@ async function selfTest(){
   await t('parseJwt tolerates a Bearer prefix',   ()=>eq(parseJwt('Bearer '+mkJwt({alg:'RS256'},{oid:'y'})).body.oid,'y'));
   await t('a Graph audience is called out',       ()=>{ $('jwtIn').value=mkJwt({alg:'RS256'},{iss:'https://sts.windows.net/x/',aud:'https://graph.microsoft.com'}); inspectJwt(); return has($('jwtOut').innerHTML,/not an identity token/); });
 
+  /* ---- item 5: the OData filter must survive a hostile app name ---- */
+  await t('app name with & does not inject a query parameter', ()=>{
+    const q=spQuery("Acme & Sons", 'id');
+    if(/&\$select/.test(q.replace(/%26/g,''))===false) return `lost the $select: ${q}`;
+    return not(q.split('$filter=')[1].split('&')[0], /&/);
+  });
+  await t('app name with # does not truncate the URL', ()=>not(spQuery('Sharp#Name','id'),/#/));
+  /* encodeURIComponent leaves ' and ( ) alone, which is legal in a query
+     string. What matters is that OData sees a doubled quote. */
+  await t('app name with an apostrophe is OData-escaped', ()=>has(spQuery("O'Brien School",'id'),/'O''Brien%20School'/));
+  await t('a + in an app name is encoded, not read as a space', ()=>has(spQuery('A+B','id'),/%2B/));
+  await t('GUID app id uses the appId filter and no $top', ()=>{
+    const q=spQuery('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee','id');
+    return /appId%20eq/.test(q)&&!/\$top/.test(q) ? true : q;
+  });
+  await t('a plain name still uses startswith and $top', ()=>{
+    const q=spQuery('ClassLink','id');
+    return /startswith\(displayName/.test(q)&&/\$top=10/.test(q) ? true : q;
+  });
+
+  /* ---- item 6: MSAL failing to start must disable sign-in, not stay silent ---- */
+  await t('MSAL init failure disables sign-in and says why', async ()=>{
+    const realMsal=window.msal, cid=$('cfgClient').value, tid=$('cfgTenant').value;
+    try{
+      window.msal={PublicClientApplication:function(){ throw new Error('simulated init failure'); }};
+      $('cfgClient').value='11111111-2222-3333-4444-555555555555';
+      await buildAuth();
+      if(!$('signIn').disabled) return 'sign-in button left enabled';
+      if(!/could not start/.test($('who').innerHTML)) return `no explanation: ${$('who').textContent.slice(0,80)}`;
+      if(msalApp!==null) return 'left a half-built msalApp in place';
+      return true;
+    } finally {
+      window.msal=realMsal; $('cfgClient').value=cid; $('cfgTenant').value=tid;
+      await buildAuth();
+    }
+  });
+
+  /* ---- item 7: the popup must be opened inside the click, not after an await ---- */
+  await t('Graph Explorer popup opens synchronously with the click', ()=>{
+    const realOpen=window.open;
+    let openedSynchronously=false;
+    try{
+      window.open=()=>{ openedSynchronously=true; return null; };
+      document.querySelector('[data-ge]').click();
+      /* Checked immediately: nothing has awaited yet, so a deferred open fails. */
+      return openedSynchronously ? true : 'window.open was not called during the click';
+    } finally { window.open=realOpen; }
+  });
+  await t('a blocked popup is reported and the query is shown', async ()=>{
+    const realOpen=window.open;
+    try{
+      window.open=()=>null;
+      document.querySelector('[data-ge]').click();
+      await new Promise(r=>setTimeout(r,50));
+      if(!/popup was blocked/.test($('geNote').innerHTML)) return `note did not mention the block: ${$('geNote').textContent.slice(0,80)}`;
+      return has($('liveOut').innerHTML,/Query to run in Graph Explorer/);
+    } finally { window.open=realOpen; clearPasted(); }
+  });
+
+  /* ---- item 10: clearing must drop the in-memory service principal ---- */
+  await t('Clear drops the pasted service principal', ()=>{
+    $('pasteIn').value=JSON.stringify({'@odata.context':'x/$metadata#servicePrincipals',value:[spCert(300)]});
+    $('pasteGo').click();
+    if(!pastedSp) return 'paste did not record a service principal to begin with';
+    clearPasted();
+    return eq(pastedSp,null);
+  });
+  await t('Clear empties the paste box and the output', ()=>{
+    $('pasteIn').value='{"hello":"world"}'; $('pasteGo').click(); clearPasted();
+    return eq($('pasteIn').value+$('liveOut').innerHTML,'');
+  });
+
+  /* ---- item 13: encryption certificates are not signing certificates ---- */
+  await t('a token-encryption certificate is not listed as signing', ()=>{
+    const sp={displayName:'T',appId:'a',id:'sp1',preferredTokenSigningKeyThumbprint:hex,
+      keyCredentials:[{usage:'Encrypt',type:'AsymmetricX509Cert',customKeyIdentifier:b64,
+        endDateTime:new Date(Date.now()+86400000).toISOString()}]};
+    const r=analyseServicePrincipal(sp);
+    return has(r.certRows,/none returned/);
+  });
+  await t('a signing certificate without a usage field is still listed', ()=>{
+    const sp={displayName:'T',appId:'a',id:'sp1',preferredTokenSigningKeyThumbprint:hex,
+      keyCredentials:[{type:'AsymmetricX509Cert',customKeyIdentifier:b64,
+        endDateTime:new Date(Date.now()+300*86400000).toISOString()}]};
+    return has(analyseServicePrincipal(sp).certRows,/Active certificate/);
+  });
+
   /* ---- shape detection, both modes share this engine ---- */
   await t('paste mode recognises a service principal', ()=>{
     $('pasteIn').value=JSON.stringify({'@odata.context':'x/$metadata#servicePrincipals',value:[spCert(300)]});
@@ -1592,8 +1730,10 @@ async function selfTest(){
     return has($('liveOut').innerHTML,/Could not parse/);
   });
 
-  /* Leave no fixture behind in the inputs. */
-  ['samlIn','jwtIn','pasteIn'].forEach(id=>{ $(id).value=''; });
+  /* Leave no fixture behind, in the inputs or in memory. clearPasted() also
+     drops liveOut, which the results table below then fills. */
+  clearPasted();
+  ['samlIn','jwtIn'].forEach(id=>{ $(id).value=''; });
   ['samlOut','jwtOut'].forEach(id=>{ $(id).innerHTML=''; });
 
   const cls={pass:'st-pass',fail:'st-fail',skip:''};
