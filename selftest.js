@@ -325,6 +325,24 @@ async function selfTest(){
     return has(analyseServicePrincipal(sp).certRows,/Active certificate/);
   });
 
+  /* ---- documented scope invariants ----
+     Verified against a live token on 2026-08-12: the granted list came back as
+     Application.Read.All, AuditLog.Read.All, Directory.Read.All, User.Read.All,
+     openid, profile, email. MSAL adds openid and profile to every request on its
+     own. No offline_access, so no refresh token, so the Setup tab is telling
+     district admins the truth. That claim is made while asking for directory
+     access, so it has to stay true. These pin the code side of it. */
+  await t('SCOPES does not request offline_access', ()=>not(SCOPES.join(' '),/offline_access/));
+  await t('SCOPES is exactly the four documented delegated permissions', ()=>{
+    const want=['Application.Read.All','AuditLog.Read.All','Directory.Read.All','User.Read.All'];
+    return SCOPES.slice().sort().join(',')===want.sort().join(',') ? true
+      : `SCOPES is now [${SCOPES}]. Adding one widens what a district admin must consent to, so change CLAUDE.md invariant 6 deliberately rather than editing this test.`;
+  });
+  await t('every requested scope is read-only', ()=>{
+    const bad=SCOPES.filter(s=>!/\.Read(\.All)?$/.test(s));
+    return bad.length?`not read-only: ${bad.join(', ')}`:true;
+  });
+
   /* ---- item 8: supply chain ----
      Scoped to third-party origins. SRI and version pinning are about code
      arriving from someone else's server; a same-origin file such as this one
