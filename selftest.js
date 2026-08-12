@@ -80,6 +80,107 @@ async function selfTest(){
   await t('only a complete check may cite AADSTS50105', ()=>not(asg([],{userId:'u1',groupIds:['g1'],assigned:new Set(['g9']),complete:false,truncated:true}).rows,/AADSTS50105/));
   await t('truncated paging degrades to warn, not fail',()=>eq(asg([],{userId:'u1',groupIds:['g1'],assigned:new Set(['g9']),complete:false,truncated:true}).st.assigned,'warn'));
 
+  /* ---- assignmentContext against a stubbed Graph ----
+     The paging, the nextLink rewrite, the page bound and the principal matching
+     are pure logic and were previously untested, because reaching them needed a
+     live tenant. Swapping g() for a stub covers all of it here. What remains for
+     a live run is only whether real Graph accepts the two queries, which the
+     first case below pins so a "simplification" cannot silently change them.
+     g() is a top-level function declaration, so it is a property of the global
+     object and can be replaced. Always restore it in a finally. */
+  const withGraph=async (handler, fn)=>{
+    const realG=g;
+    const calls=[];
+    try{
+      window.g=async path=>{ calls.push(path); return handler(path, calls.length); };
+      const out=await fn();
+      return {out, calls};
+    } finally { window.g=realG; }
+  };
+
+  await t('assignmentContext queries both endpoints in the expected shape', async ()=>{
+    const {out,calls}=await withGraph(
+      path=>/appRoleAssignedTo/.test(path)
+        ? {value:[{principalId:'g1'},{principalId:'u9'},{}]}
+        : {value:[{id:'g1'},{id:'g2'},{}]},
+      ()=>assignmentContext('sp1','user@example.org'));
+    if(!calls.length) return 'the stub was never called, so g() could not be replaced';
+    if(calls.length!==2) return `made ${calls.length} requests, expected 2`;
+    if(!/^\/servicePrincipals\/sp1\/appRoleAssignedTo\?\$select=principalId&\$top=999$/.test(calls[0]))
+      return `first query changed: ${calls[0]}`;
+    if(!/^\/users\/user%40example\.org\/transitiveMemberOf\/microsoft\.graph\.group\?\$select=id&\$top=999$/.test(calls[1]))
+      return `second query changed: ${calls[1]}`;
+    /* The empty objects must be skipped rather than counted. */
+    if(out.assigned.size!==2) return `collected ${out.assigned.size} principals, expected 2`;
+    if(out.groupIds.join(',')!=='g1,g2') return `collected groups [${out.groupIds}]`;
+    return out.complete===true&&out.truncated===false?true:`complete=${out.complete} truncated=${out.truncated}`;
+  });
+
+  await t('assignmentContext follows @odata.nextLink and strips the absolute prefix', async ()=>{
+    const {out,calls}=await withGraph(
+      path=>{
+        if(!/appRoleAssignedTo|more/.test(path)) return {value:[{id:'g9'}]};
+        return /more/.test(path)
+          ? {value:[{principalId:'second-page'}]}
+          : {value:[{principalId:'first-page'}],
+             '@odata.nextLink':'https://graph.microsoft.com/v1.0/more?$skiptoken=abc'};
+      },
+      ()=>assignmentContext('sp1','u@x.org'));
+    if(out.assigned.size!==2) return `collected ${out.assigned.size} across pages, expected 2`;
+    if(/^https:\/\//.test(calls[1]||'')) return `nextLink not rewritten to a path: ${calls[1]}`;
+    if(calls[1]!=='/more?$skiptoken=abc') return `unexpected second request: ${calls[1]}`;
+    return out.complete===true?true:'marked incomplete despite finishing';
+  });
+
+  await t('assignmentContext stops at the page bound instead of looping forever', async ()=>{
+    const {out,calls}=await withGraph(
+      (path,n)=> /appRoleAssignedTo|more/.test(path)
+        ? {value:[{principalId:'p'+n}], '@odata.nextLink':'https://graph.microsoft.com/v1.0/more?page='+n}
+        : {value:[{id:'g1'}]},
+      ()=>assignmentContext('sp1','u@x.org'));
+    if(calls.length!==11) return `made ${calls.length} requests, expected 10 for the bounded endpoint plus 1`;
+    if(out.truncated!==true) return 'did not set truncated';
+    if(out.complete!==false) return 'claimed complete despite truncating';
+    /* Incomplete data must never produce a failure verdict. That would recreate
+       the exact false negative this whole mechanism exists to remove. */
+    const v=analyseAssignments([],{id:'sp1',displayName:'T',appRoleAssignmentRequired:true},out);
+    return v.st.assigned==='warn'?true:`verdict was ${v.st.assigned}, must not be fail on partial data`;
+  });
+
+  await t('a Graph failure propagates so the live run can fall back', async ()=>{
+    let threw=null;
+    try{
+      await withGraph(()=>{ const e=new Error('Insufficient privileges'); e.status=403; throw e; },
+        ()=>assignmentContext('sp1','u@x.org'));
+    }catch(e){ threw=e; }
+    if(!threw) return 'resolved instead of rejecting, so a 403 would look like "no groups"';
+    return threw.status===403?true:`rejected with the wrong error: ${threw.message}`;
+  });
+
+  await t('a group-inherited assignment resolves end to end', async ()=>{
+    const {out}=await withGraph(
+      path=>/appRoleAssignedTo/.test(path)?{value:[{principalId:'group-A'}]}
+                                          :{value:[{id:'group-A'},{id:'group-B'}]},
+      ()=>assignmentContext('sp1','u@x.org'));
+    out.userId='user-1';
+    const v=analyseAssignments([],{id:'sp1',displayName:'T',appRoleAssignmentRequired:true},out);
+    if(v.st.assigned!=='pass') return `verdict ${v.st.assigned}, expected pass`;
+    return has(v.rows,/through 1 assigned group/);
+  });
+
+  await t('a user in no assigned group is still correctly failed', async ()=>{
+    const {out}=await withGraph(
+      path=>/appRoleAssignedTo/.test(path)?{value:[{principalId:'some-other-group'}]}
+                                          :{value:[{id:'group-B'}]},
+      ()=>assignmentContext('sp1','u@x.org'));
+    out.userId='user-1';
+    const v=analyseAssignments([],{id:'sp1',displayName:'T',appRoleAssignmentRequired:true},out);
+    return v.st.assigned==='fail'?has(v.rows,/AADSTS50105/):`verdict ${v.st.assigned}, expected fail`;
+  });
+
+  await t('the real g() is restored after stubbing', ()=>eq(typeof g,'function')===true
+    && !/calls\.push/.test(String(g)) ? true : 'g() is still the stub, later tests would be corrupted');
+
   /* ---- item 3: a missing status is not a success ---- */
   await t('real success is green',           ()=>has(analyseSignIns([{status:{errorCode:0}}]).rows,/<td class="st-pass">success<\/td>/));
   await t('real failure is red',             ()=>has(analyseSignIns([{status:{errorCode:50105}}]).rows,/<td class="st-fail">AADSTS50105<\/td>/));
