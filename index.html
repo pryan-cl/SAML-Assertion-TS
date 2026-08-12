@@ -966,7 +966,17 @@ function analyseAssignments(list, sp, ctx){
 /* Reads the assignment question from the side that can actually answer it:
    every principal assigned to the app, plus every group the user is a
    transitive member of. Pages are bounded, and a bound that is hit sets
-   truncated so the verdict degrades to "cannot tell" instead of "no". */
+   truncated so the verdict degrades to "cannot tell" instead of "no".
+
+   The /microsoft.graph.group cast on transitiveMemberOf is required, not
+   decorative. Without it the endpoint returns directoryRole and
+   administrativeUnit objects alongside groups: confirmed against a live tenant,
+   where an uncast call returned the caller's group plus their Global
+   Administrator role. Those IDs would land in groupIds and inflate the group
+   count quoted in the failure note. Graph Explorer's inline linter flags the
+   cast as a possible error; it is wrong, the request returns 200 and filters
+   correctly. The self test pins both query strings, so dropping the cast fails
+   the suite. */
 async function assignmentContext(spId, userQ){
   const ctx={userId:null, groupIds:[], assigned:new Set(), complete:false, truncated:false};
   const drain=async (path, take)=>{
