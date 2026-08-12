@@ -267,7 +267,7 @@ async function selfTest(){
     return /appId%20eq/.test(q)&&!/\$top/.test(q) ? true : q;
   });
   await t('a plain name still uses startswith and $top', ()=>{
-    const q=spQuery('ClassLink','id');
+    const q=spQuery('Test App','id');
     return /startswith\(displayName/.test(q)&&/\$top=10/.test(q) ? true : q;
   });
 
@@ -441,7 +441,7 @@ async function selfTest(){
   await t('camelKeys prefers a genuine camelCase key', ()=>eq(camelKeys({Id:'pascal',id:'camel'}).id,'camel'));
   await t('camelKeys recurses through arrays', ()=>eq(camelKeys({V:[{AppId:'a'}]}).v[0].appId,'a'));
   await t('a PowerShell service principal analyses correctly end to end', ()=>{
-    const ps={DisplayName:'ClassLink',AppId:'a',Id:'sp1',PreferredSingleSignOnMode:'saml',
+    const ps={DisplayName:'Test App',AppId:'a',Id:'sp1',PreferredSingleSignOnMode:'saml',
       AppRoleAssignmentRequired:true,PreferredTokenSigningKeyThumbprint:hex,
       KeyCredentials:[{Usage:'Verify',Type:'AsymmetricX509Cert',CustomKeyIdentifier:bytes,
         EndDateTime:new Date(Date.now()-30*86400000).toISOString()}]};
@@ -451,7 +451,7 @@ async function selfTest(){
     return eq(r.st.cert,'fail');
   });
   await t('paste mode recognises PowerShell output', ()=>{
-    $('pasteIn').value=JSON.stringify({DisplayName:'ClassLink',AppId:'a',Id:'sp1',
+    $('pasteIn').value=JSON.stringify({DisplayName:'Test App',AppId:'a',Id:'sp1',
       PreferredSingleSignOnMode:'saml',ServicePrincipalNames:['https://x'],KeyCredentials:[]});
     $('pasteGo').click();
     const okNow=/Application configuration/.test($('liveOut').innerHTML);

@@ -445,7 +445,7 @@ pre.snip b{color:var(--info);font-weight:400}
     <pre class="snip">Connect-MgGraph -Scopes <b>"Application.Read.All","User.Read.All","AuditLog.Read.All"</b>
 
 <b># App configuration, signing certs, entity IDs, reply URLs</b>
-Get-MgServicePrincipal -Filter "displayName eq 'ClassLink'" |
+Get-MgServicePrincipal -Filter "displayName eq 'APP-NAME'" |
   Select-Object id,appId,displayName,preferredSingleSignOnMode,
     appRoleAssignmentRequired,preferredTokenSigningKeyThumbprint,
     notificationEmailAddresses,replyUrls,servicePrincipalNames,keyCredentials |
@@ -462,7 +462,7 @@ Get-MgUserAppRoleAssignment -UserId "jdoe@district.k12.st.us" | ConvertTo-Json -
 <b># Recent sign-ins for the app (needs Entra ID P1 or P2)</b>
 Get-MgAuditLogSignIn -Filter "appId eq 'APP-GUID'" -Top 15 | ConvertTo-Json -Depth 5</pre>
     <p>Graph Explorer equivalents, if they prefer clicking:</p>
-    <pre class="snip">GET /v1.0/servicePrincipals?$filter=startswith(displayName,'ClassLink')
+    <pre class="snip">GET /v1.0/servicePrincipals?$filter=startswith(displayName,'APP-NAME')
 GET /v1.0/users/USER?$select=userPrincipalName,mail,proxyAddresses,accountEnabled,userType,onPremisesSyncEnabled,onPremisesImmutableId
 GET /v1.0/users/USER/appRoleAssignments
 GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
@@ -1084,7 +1084,7 @@ $('runChecks').addEventListener('click', async ()=>{
     try{
       const list=(await g(spQuery(appQ, SEL))).value||[];
       if(!list.length) errors+=findRow('fail','Application',`no match for <code>${esc(appQ)}</code>`,
-        'Check the display name under Enterprise applications. Names are often suffixed, like "ClassLink SSO" or "ClassLink - Staff".');
+        'Check the exact display name under Enterprise applications. This is a <b>startswith</b> match, so a name carrying a prefix will never be found, and suffixes like "SSO" or "- Staff" are common. Pasting the application ID instead avoids the problem entirely.');
       else{
         sp=list[0];
         if(list.length>1) errors+=findRow('warn','Multiple apps matched',
