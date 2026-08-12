@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Federation Bench — Entra ID to third-party SSO diagnostics</title>
+<meta name="description" content="Client-side diagnostics for SAML assertions, OIDC tokens, AADSTS errors, and live read-only Entra ID tenant configuration checks.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3/lib/msal-browser.min.js"></script>
+<style>
+:root{
+  /* PowerTools .dark.style-polished, verbatim */
+  --bg:#0c0f14;
+  --card-base:#141820;
+  --card:color-mix(in srgb, #141820, var(--accent) 5%);
+  --muted:#151a22;
+  --elevated:#1e2736;
+  --border:#1e2736;
+  --input:#1e2736;
+  --text:#e2e8f0;
+  --dim:#a3a3a3;
+  --faint:#94a3b8;
+  --accent:#3b82f6;
+  --accent2:#14b8a6;
+  --ring:#3b82f6;
+  --pass:#4ade80;
+  --warn:#facc15;
+  --fail:#dc2626;
+  --info:#60a5fa;
+  --th-bg:#151a22;
+  --th-text:#94a3b8;
+  --sidebar-top:18%;
+  --sidebar-bottom:21%;
+  --r:.5rem;              /* --card-radius */
+  --r-sm:.375rem;          /* --radius */
+  --r-xs:.25rem;           /* --radius-sm */
+  --tight:-.025em; --wider:.05em; --widest:.1em;
+  --shadow:0 1px 2px #00000026;
+  --f-body:"Inter","Segoe UI",system-ui,sans-serif;
+  --f-mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+  /* aliases for generated markup */
+  --card-2:var(--muted); --sunken:var(--bg); --border-soft:var(--border);
+  --accent-soft:color-mix(in srgb, var(--card), var(--accent) 14%);
+  --accent-line:color-mix(in srgb, var(--card), var(--accent) 40%);
+  --bg-side:var(--card); --bg-top:var(--bg);
+  --panel-edge:var(--border); --readout:var(--card); --ink:var(--text); --ink-soft:var(--dim); --ultra:var(--accent);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);
+  font-family:var(--f-body);font-size:14.5px;line-height:1.55;
+  -webkit-font-smoothing:antialiased}
+a{color:var(--accent)}
+
+/* ---------- shell ---------- */
+.shell{display:flex;min-height:100vh}
+.sidebar{width:238px;flex:0 0 238px;
+  background:linear-gradient(176deg,
+    color-mix(in srgb, var(--accent) var(--sidebar-top), var(--card)) 0%,
+    color-mix(in srgb, var(--accent2) var(--sidebar-bottom), var(--card)) 100%);border-right:1px solid var(--border-soft);
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.side-head{display:flex;align-items:center;gap:10px;padding:16px 14px;border-bottom:1px solid var(--border-soft)}
+.mark{width:30px;height:30px;flex:0 0 30px;border-radius:var(--r-sm);background:var(--accent-soft);
+  border:1px solid var(--accent-line);display:grid;place-items:center;color:var(--accent)}
+.mark svg{width:17px;height:17px}
+.side-title{flex:1;min-width:0}
+.side-title b{display:block;font-family:var(--f-body);font-size:14px;font-weight:600;letter-spacing:var(--tight);line-height:1.2}
+.side-title span{display:block;font-family:var(--f-body);font-size:9.5px;letter-spacing:var(--widest);text-transform:uppercase;color:var(--faint);margin-top:1px}
+.collapse{appearance:none;background:none;border:0;color:var(--faint);cursor:pointer;padding:4px;border-radius:var(--r-xs);display:grid;place-items:center}
+.collapse:hover{color:var(--text);background:var(--elevated)}
+.collapse svg{width:16px;height:16px}
+nav.side-nav{flex:1;overflow-y:auto;padding:12px 8px}
+.nav-group{font-family:var(--f-body);font-size:10px;font-weight:500;letter-spacing:var(--widest);text-transform:uppercase;color:var(--faint);
+  padding:16px 10px 7px}
+.nav-group:first-child{padding-top:4px}
+.chan{display:flex;align-items:center;gap:10px;width:100%;appearance:none;border:0;background:none;
+  color:var(--dim);cursor:pointer;text-align:left;padding:8px 10px;border-radius:var(--r-sm);
+  font-family:var(--f-body);font-size:13.5px;font-weight:500;margin-bottom:1px}
+.chan svg{width:16px;height:16px;flex:0 0 16px;opacity:.85}
+.chan:hover{background:var(--elevated);color:var(--text)}
+.chan[aria-selected="true"]{background:var(--accent-soft);color:var(--accent)}
+.chan[aria-selected="true"] svg{opacity:1}
+.chan:focus-visible{outline:2px solid var(--ring);outline-offset:-2px}
+.side-foot{padding:12px 16px;border-top:1px solid var(--border-soft);font-size:11px;color:var(--faint)}
+.shell.collapsed .sidebar{width:60px;flex-basis:60px}
+.shell.collapsed .side-title,.shell.collapsed .nav-group,.shell.collapsed .nav-label,.shell.collapsed .side-foot{display:none}
+.shell.collapsed .chan{justify-content:center;padding:9px 0}
+.shell.collapsed .side-head{justify-content:center;padding:16px 0}
+
+main{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:16px;
+  height:57px;padding:0 24px;background:var(--bg-top);border-bottom:1px solid var(--border-soft)}
+.topbar h1{margin:0;font-family:var(--f-body);font-size:15.5px;font-weight:600;letter-spacing:var(--tight)}
+.pill{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--dim);
+  border:1px solid var(--border);border-radius:999px;padding:5px 12px;background:var(--card-2);max-width:52vw}
+.pill svg{width:13px;height:13px;flex:0 0 13px;opacity:.7}
+.pill b{color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill.live{border-color:var(--accent-line);color:var(--accent)}
+.pill.live b{color:var(--accent)}
+.content{padding:24px;max-width:1080px;width:100%}
+
+/* ---------- input panels ---------- */
+.io{background:var(--card);border:1px solid var(--border);border-radius:var(--r);margin-bottom:16px;overflow:hidden;box-shadow:var(--shadow)}
+.io-head{display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap;
+  padding:12px 15px;border-bottom:1px solid var(--border-soft)}
+.io-label{font-family:var(--f-body);font-size:11px;font-weight:500;letter-spacing:var(--widest);text-transform:uppercase;color:var(--dim)}
+.io-hint{font-size:12.5px;color:var(--faint)}
+textarea,input[type=text]{width:100%;border:0;background:transparent;color:var(--text);
+  font-family:var(--f-mono);font-size:13px;line-height:1.6;padding:13px 15px;resize:vertical}
+textarea{min-height:150px}
+textarea::placeholder,input::placeholder{color:var(--faint)}
+textarea:focus,input[type=text]:focus{outline:0;background:rgba(59,130,246,.05);box-shadow:inset 0 0 0 1px var(--ring)}
+.io-row{display:flex;flex-wrap:wrap;border-top:1px solid var(--border-soft)}
+.io-row > label{flex:1 1 260px;display:flex;flex-direction:column;border-right:1px solid var(--border-soft);min-width:0}
+.io-row > label:last-child{border-right:0}
+.io-row span{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);padding:11px 15px 0}
+.io-row input{padding-top:5px}
+.io-foot{display:flex;flex-wrap:wrap;gap:8px;padding:12px 15px;border-top:1px solid var(--border-soft);align-items:center}
+button.act{appearance:none;font-family:var(--f-body);font-size:13px;font-weight:500;padding:8px 15px;cursor:pointer;
+  border:1px solid var(--border);background:var(--card-2);color:var(--text);border-radius:var(--r-sm);
+  transition:background .12s,border-color .12s}
+button.act:hover{background:var(--elevated);border-color:#2c3648}
+button.act.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.act.primary:hover{background:#5b9bf8;border-color:#5b9bf8}
+button.act.danger{color:#f87171;border-color:rgba(220,38,38,.45)}
+button.act.danger:hover{background:rgba(220,38,38,.12)}
+button.act:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+button.act[disabled]{opacity:.4;cursor:not-allowed}
+.who{font-size:12.5px;color:var(--faint);flex:1 1 240px;min-width:0}
+.who b{color:var(--dim);font-weight:500}
+
+/* ---------- verdict strip ---------- */
+.strip{display:flex;gap:5px;margin-bottom:9px}
+.seg{flex:1;height:36px;border-radius:var(--r-sm);background:var(--card-2);border:1px solid var(--border-soft);
+  position:relative;overflow:hidden;opacity:0;transform:translateY(4px)}
+.seg.in{animation:settle .22s ease-out forwards}
+@keyframes settle{to{opacity:1;transform:translateY(0)}}
+.seg span{position:absolute;inset:auto 0 0 0;height:0;transition:height .3s ease-out;opacity:.9}
+.seg.in span{height:100%}
+.seg[data-state=pass] span{background:linear-gradient(rgba(74,222,128,.4),rgba(74,222,128,.8))}
+.seg[data-state=warn] span{background:linear-gradient(rgba(250,204,21,.4),rgba(250,204,21,.8))}
+.seg[data-state=fail] span{background:linear-gradient(rgba(220,38,38,.55),rgba(220,38,38,.95))}
+.seg[data-state=info] span{background:linear-gradient(rgba(59,130,246,.45),rgba(59,130,246,.9))}
+.seg[data-state=na] span{background:repeating-linear-gradient(45deg,var(--muted) 0 5px,var(--elevated) 5px 10px)}
+.seg em{position:absolute;left:9px;top:9px;z-index:2;font-style:normal;
+  font-family:var(--f-mono);font-size:10px;font-weight:600;letter-spacing:.08em;
+  text-transform:uppercase;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5)}
+.striplabel{font-size:12.5px;color:var(--faint);margin:0 0 22px}
+@media (prefers-reduced-motion:reduce){.seg,.seg span{animation:none!important;transition:none!important;opacity:1;transform:none;height:100%}}
+
+/* ---------- result cards ---------- */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);margin-bottom:16px;overflow:hidden;box-shadow:var(--shadow)}
+.card > h2{margin:0;padding:13px 15px;border-bottom:1px solid var(--border-soft);
+  font-family:var(--f-body);font-size:12.5px;font-weight:500;letter-spacing:var(--wider);text-transform:uppercase;color:var(--dim);
+  display:flex;align-items:center;gap:9px}
+.card > h2::before{content:"";width:7px;height:7px;border-radius:2px;background:var(--accent);opacity:.8;flex:0 0 7px}
+.find{display:grid;grid-template-columns:30px 190px 1fr;gap:0 12px;padding:12px 15px 12px 0;
+  border-bottom:1px solid var(--border);align-items:start}
+.find:last-child{border-bottom:0}
+.dot{width:30px;text-align:center;font-family:var(--f-mono);font-size:11px;font-weight:600;padding-top:2px}
+.dot[data-state=pass]{color:var(--pass)}.dot[data-state=warn]{color:var(--warn)}
+.dot[data-state=fail]{color:#f87171}.dot[data-state=info]{color:var(--info)}.dot[data-state=na]{color:var(--faint)}
+.k{font-family:var(--f-body);font-size:11.5px;font-weight:500;letter-spacing:var(--wider);text-transform:uppercase;color:var(--faint);padding-top:2px}
+.v{min-width:0;font-size:13.5px}
+.v code,.mono{font-family:var(--f-mono);font-size:12.5px;word-break:break-all;color:var(--text)}
+.v code{background:var(--sunken);border:1px solid var(--border-soft);border-radius:5px;padding:1px 5px}
+.v .note{display:block;margin-top:6px;font-size:13px;color:var(--dim);line-height:1.5}
+.v .note b{color:var(--text);font-weight:600}
+.v .note code{font-size:12px}
+@media (max-width:700px){.find{grid-template-columns:26px 1fr;gap:0 8px}.k{grid-column:2;padding-top:0;margin-bottom:3px}.v{grid-column:2}}
+
+table.claims{width:100%;border-collapse:collapse;font-size:12.5px}
+table.claims th,table.claims td{text-align:left;vertical-align:top;padding:9px 15px;
+  border-bottom:1px solid var(--border);font-family:var(--f-mono);word-break:break-all}
+table.claims th{font-size:10.5px;letter-spacing:var(--wider);text-transform:uppercase;color:var(--th-text);font-weight:600;
+  font-family:var(--f-body);background:var(--th-bg)}
+table.claims td{color:var(--dim)}
+table.claims td.short{color:var(--info);font-weight:500;white-space:nowrap}
+table.claims td.st-fail{color:#f87171;font-weight:500}
+table.claims td.st-pass{color:var(--pass);font-weight:500}
+.empty{padding:16px 15px;color:var(--faint);font-size:13.5px}
+
+/* ---------- prose cards ---------- */
+.notes h3{font-family:var(--f-body);font-size:14px;font-weight:600;color:var(--text);margin:22px 15px 8px;letter-spacing:-.005em}
+.notes ul,.notes ol{margin:0;padding:0 15px 4px 34px;color:var(--dim)}
+.notes li{margin-bottom:9px;font-size:13.5px;line-height:1.55}
+.notes li::marker{color:var(--faint)}
+.notes li b{color:var(--text);font-weight:600}
+.notes p{padding:0 15px;font-size:13.5px;margin:9px 0;color:var(--dim);line-height:1.6}
+.notes p b{color:var(--text)}
+.notes code{font-family:var(--f-mono);font-size:12px;background:var(--sunken);
+  border:1px solid var(--border-soft);border-radius:5px;padding:1px 5px;color:var(--text)}
+pre.snip{margin:0 15px 16px;padding:14px;background:var(--sunken);border:1px solid var(--border-soft);
+  border-radius:var(--r-sm);overflow-x:auto;color:var(--dim);
+  font-family:var(--f-mono);font-size:11.5px;line-height:1.6}
+pre.snip b{color:var(--info);font-weight:400}
+
+.warnbox{border:1px solid rgba(250,204,21,.28);border-left:3px solid var(--warn);
+  background:rgba(250,204,21,.06);border-radius:var(--r-sm);padding:13px 15px;font-size:13.5px;
+  margin-bottom:16px;color:var(--dim);line-height:1.55}
+.warnbox.stop{border-color:rgba(220,38,38,.32);border-left-color:var(--fail);background:rgba(220,38,38,.08)}
+.warnbox b{color:var(--text);font-weight:600}
+.warnbox code{font-family:var(--f-mono);font-size:12px;
+  background:rgba(0,0,0,.35);border-radius:4px;padding:1px 5px;color:var(--text)}
+
+.foot{font-size:12px;color:var(--faint);border-top:1px solid var(--border-soft);
+  margin:8px 0 0;padding:16px 0 40px;line-height:1.6;text-align:center}
+.hidden{display:none}
+
+@media (max-width:860px){
+  .shell{flex-direction:column}
+  .sidebar{width:auto;flex-basis:auto;height:auto;position:static;border-right:0;border-bottom:1px solid var(--border-soft)}
+  nav.side-nav{display:flex;gap:4px;overflow-x:auto;padding:8px}
+  .nav-group,.side-foot,.collapse{display:none}
+  .chan{width:auto;white-space:nowrap;flex:0 0 auto}
+  .content{padding:16px}
+  .topbar{padding:0 16px}
+}
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+
+<aside class="sidebar">
+  <div class="side-head">
+    <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg></div>
+    <div class="side-title"><b>Federation Bench</b><span>SSO Diagnostics</span></div>
+    <button class="collapse" id="collapseBtn" title="Collapse sidebar" aria-label="Collapse sidebar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
+  </div>
+  <nav class="side-nav" role="tablist" aria-label="Diagnostic channel">
+    <div class="nav-group">Diagnostics</div>
+    <button class="chan" role="tab" id="tab-live" aria-selected="true" data-panel="p-live" data-title="Live tenant"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg><span class="nav-label">Live tenant</span></button>
+    <button class="chan" role="tab" id="tab-saml" aria-selected="false" data-panel="p-saml" data-title="SAML message"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M4.3 21a2 2 0 0 0 1.7 1h12a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v3"/><path d="m9 18-1.5-1.5"/><circle cx="5" cy="14" r="3"/></svg><span class="nav-label">SAML message</span></button>
+    <button class="chan" role="tab" id="tab-jwt" aria-selected="false" data-panel="p-jwt" data-title="OIDC token"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg><span class="nav-label">OIDC token</span></button>
+    <div class="nav-group">Reference</div>
+    <button class="chan" role="tab" id="tab-err" aria-selected="false" data-panel="p-err" data-title="AADSTS code"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><span class="nav-label">AADSTS code</span></button>
+    <button class="chan" role="tab" id="tab-notes" aria-selected="false" data-panel="p-notes" data-title="Field notes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg><span class="nav-label">Field notes</span></button>
+    <div class="nav-group">Configuration</div>
+    <button class="chan" role="tab" id="tab-setup" aria-selected="false" data-panel="p-setup" data-title="Setup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 5H3M21 5h-7M8 12H3M21 12H12M14 19H3M21 19h-3"/><path d="M14 3v4M12 10v4M17 17v4"/></svg><span class="nav-label">Setup</span></button>
+  </nav>
+  <div class="side-foot">Read only. Nothing stored or uploaded.</div>
+</aside>
+
+<main>
+  <header class="topbar">
+    <h1 id="pageTitle">Live tenant</h1>
+    <div class="pill" id="sessionPill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><b>Not signed in</b></div>
+  </header>
+  <div class="content">
+
+<!-- ============ LIVE TENANT ============ -->
+<section id="p-live" role="tabpanel" aria-labelledby="tab-live">
+  <div class="io">
+    <div class="io-head">
+      <span class="io-label">Tenant session</span>
+      <span class="io-hint" id="modeHint">Read-only, delegated, expires with this tab</span>
+    </div>
+    <div class="io-row">
+      <label><span>Application (client) ID</span>
+        <input type="text" id="cfgClient" spellcheck="false" placeholder="Yours, or the district's own app registration"></label>
+      <label><span>Tenant ID (blank for multi-tenant)</span>
+        <input type="text" id="cfgTenant" spellcheck="false" placeholder="Required if the app is single-tenant"></label>
+    </div>
+    <div class="io-foot">
+      <button class="act primary" id="signIn">Sign in to district tenant</button>
+      <button class="act danger hidden" id="signOut">End session</button>
+      <button class="act" id="cfgForget">Forget these IDs</button>
+      <span class="who" id="who">Not signed in.</span>
+    </div>
+  </div>
+
+  <div class="io">
+    <div class="io-head">
+      <span class="io-label">What are we troubleshooting</span>
+      <span class="io-hint">App name or application ID, plus the affected user if you have one</span>
+    </div>
+    <div class="io-row">
+      <label><span>Enterprise application</span>
+        <input type="text" id="qApp" spellcheck="false" placeholder="ClassLink   or   8f1b…-…-…"></label>
+      <label><span>Affected user (optional)</span>
+        <input type="text" id="qUser" spellcheck="false" placeholder="jdoe@district.k12.st.us"></label>
+    </div>
+    <div class="io-foot">
+      <button class="act primary" id="runChecks" disabled>Run checks</button>
+      <button class="act" id="pasteMode">Use pasted output instead</button>
+    </div>
+  </div>
+
+  <div class="io hidden" id="pastePanel">
+    <div class="io-head">
+      <span class="io-label">Pasted Graph output</span>
+      <span class="io-hint">One JSON response at a time — the shape is detected</span>
+    </div>
+    <textarea id="pasteIn" spellcheck="false" placeholder="Paste JSON from Graph Explorer or PowerShell. Service principals, users, appRoleAssignments, and sign-in logs are all recognised."></textarea>
+    <div class="io-foot">
+      <button class="act primary" id="pasteGo">Analyse</button>
+      <button class="act" id="pasteClear">Clear</button>
+    </div>
+    <div class="io-head" style="border-top:1px solid var(--border-soft);border-bottom:0">
+      <span class="io-label">Build a query for them to run</span>
+      <span class="io-hint">Copies the query and opens Graph Explorer</span>
+    </div>
+    <div class="io-foot" style="border-top:0">
+      <button class="act" data-ge="/servicePrincipals?$filter=startswith(displayName,'APP_NAME')&amp;$select=id,appId,displayName,preferredSingleSignOnMode,appRoleAssignmentRequired,preferredTokenSigningKeyThumbprint,notificationEmailAddresses,replyUrls,servicePrincipalNames,keyCredentials">App config</button>
+      <button class="act" data-ge="/users/USER?$select=userPrincipalName,mail,proxyAddresses,accountEnabled,userType,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesSamAccountName">User object</button>
+      <button class="act" data-ge="/users/USER/appRoleAssignments">Assignments</button>
+      <button class="act" data-ge="/auditLogs/signIns?$filter=appId eq 'APP_GUID'&amp;$top=15">Sign-in log</button>
+      <span class="who" id="geNote">Placeholders are filled from the two fields above.</span>
+    </div>
+  </div>
+
+  <div id="liveOut"></div>
+</section>
+
+<!-- ============ SAML ============ -->
+<section id="p-saml" role="tabpanel" aria-labelledby="tab-saml" class="hidden">
+  <div class="io">
+    <div class="io-head">
+      <span class="io-label">SAMLResponse / SAMLRequest</span>
+      <span class="io-hint">Base64, deflated base64, or raw XML — it detects which</span>
+    </div>
+    <textarea id="samlIn" spellcheck="false" placeholder="Paste the SAMLResponse value from the browser POST body, or the SAMLRequest query parameter, or raw XML."></textarea>
+    <div class="io-foot">
+      <button class="act primary" id="samlGo">Inspect assertion</button>
+      <button class="act" id="samlXml">Show decoded XML</button>
+      <button class="act" id="samlClear">Clear</button>
+    </div>
+  </div>
+  <div id="samlOut"></div>
+</section>
+
+<!-- ============ JWT ============ -->
+<section id="p-jwt" role="tabpanel" aria-labelledby="tab-jwt" class="hidden">
+  <div class="io">
+    <div class="io-head">
+      <span class="io-label">id_token / access_token</span>
+      <span class="io-hint">Three dot-separated segments</span>
+    </div>
+    <textarea id="jwtIn" spellcheck="false" placeholder="eyJ0eXAiOiJKV1QiLCJhbGci..."></textarea>
+    <div class="io-foot">
+      <button class="act primary" id="jwtGo">Inspect token</button>
+      <button class="act" id="jwtVerify">Verify signature against Microsoft keys</button>
+      <button class="act" id="jwtClear">Clear</button>
+    </div>
+  </div>
+  <div id="jwtOut"></div>
+</section>
+
+<!-- ============ ERROR ============ -->
+<section id="p-err" role="tabpanel" aria-labelledby="tab-err" class="hidden">
+  <div class="io">
+    <div class="io-head"><span class="io-label">Error code</span>
+      <span class="io-hint">Paste the whole error text or just the number</span></div>
+    <input type="text" id="errIn" spellcheck="false" placeholder="AADSTS50105 or 50105">
+    <div class="io-foot"><button class="act primary" id="errGo">Look up</button></div>
+  </div>
+  <div id="errOut"></div>
+</section>
+
+<!-- ============ NOTES ============ -->
+<section id="p-notes" role="tabpanel" aria-labelledby="tab-notes" class="hidden">
+  <div class="card notes">
+    <h2>Failure modes, ranked by how often they turn out to be the answer</h2>
+    <h3>SAML</h3>
+    <ul>
+      <li><b>Audience mismatch.</b> The <code>&lt;Audience&gt;</code> must match the SP's entity ID character for character. Trailing slashes and http vs https are the usual culprits.</li>
+      <li><b>Signing certificate rolled.</b> The SP is usually pinned to a thumbprint. Compare it against the tenant's active signing key. Entra's expiry notice goes to the app's notification address, which is often a person who has left.</li>
+      <li><b>Response not signed.</b> Entra signs the assertion only by default. SPs requiring a signed response need <em>Signing Option &rarr; Sign SAML response and assertion</em>.</li>
+      <li><b>NameID is the wrong thing.</b> Default source is <code>user.userprincipalname</code>. SPs keying on email need format <code>emailAddress</code> and usually source <code>user.mail</code>. UPN and mail differ more often than people expect in districts.</li>
+      <li><b>Claim names don't match.</b> Entra emits schema URIs; many SPs want short names. Clear the namespace field to get a bare name.</li>
+      <li><b>User not assigned.</b> Assignment required plus a user outside the assigned groups is AADSTS50105, before any assertion exists.</li>
+      <li><b>Clock skew.</b> A drifted SP server rejects a good assertion as expired.</li>
+      <li><b>Reply URL mismatch.</b> AADSTS50011.</li>
+    </ul>
+    <h3>OIDC / OAuth</h3>
+    <ul>
+      <li><b>v1 versus v2 endpoint.</b> The issuer differs and so do the claims. An SP validating a v1 issuer against a v2 token fails on <code>iss</code>.</li>
+      <li><b>Wrong token handed over.</b> A Graph access token is not an id_token for the SP. Check <code>aud</code>.</li>
+      <li><b>sub is per-application.</b> Use <code>oid</code> for anything that has to correlate across systems.</li>
+      <li><b>email claim missing.</b> Not emitted unless the user object has a mail value and the claim is configured.</li>
+      <li><b>Group overage.</b> Past the token size limit Entra sends <code>hasgroups</code> instead of the list, and SPs reading only <code>groups</code> see the user in none.</li>
+      <li><b>Expired secret.</b> Looks like a total outage with no user-side symptom. AADSTS7000215 / 7000222.</li>
+      <li><b>Conditional Access.</b> AADSTS53003 means policy blocked it, not that the integration broke.</li>
+    </ul>
+    <h3>Getting the raw material</h3>
+    <ul>
+      <li><b>Browser.</b> DevTools &rarr; Network, preserve log, reproduce the sign-in, find the POST to the ACS URL, copy <code>SAMLResponse</code> from the form data.</li>
+      <li><b>Entra sign-in logs.</b> Filter to the application, open the failed row, read the failure reason and correlation ID. Escalate with the correlation ID and UTC timestamp, not a screenshot.</li>
+      <li><b>Test in isolation.</b> The enterprise app's Single sign-on blade has a Test button that reports the AADSTS code without involving the SP at all.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ SETUP ============ -->
+<section id="p-setup" role="tabpanel" aria-labelledby="tab-setup" class="hidden">
+
+  <div class="warnbox stop">
+    <b>Read this before pointing a district at the Live tenant tab.</b> Asking a district administrator to consent an application into their directory is a governance decision, not a support step. It needs an app registration owned by your organisation, publisher verification so the consent screen names your company, a published privacy statement, and whatever security review your side requires. A page on a personal <code>github.io</code> subdomain asking a school district for directory read access is shaped exactly like a phishing attempt, and a competent district administrator should refuse it. Host it on a company-controlled domain, or use pasted output instead.
+  </div>
+
+  <div class="card notes">
+    <h2>Option A — pasted output, nothing to approve</h2>
+    <p>The district administrator runs a read-only query in a tool Microsoft already owns, then pastes the result here. No app registration, no consent, no tokens in this page. This is the version to reach for on a support call today.</p>
+    <p>Send them to Graph Explorer, have them sign in, consent to the individual permission it prompts for, run the query, and copy the response. Or in PowerShell:</p>
+    <pre class="snip">Connect-MgGraph -Scopes <b>"Application.Read.All","User.Read.All","AuditLog.Read.All"</b>
+
+<b># App configuration, signing certs, entity IDs, reply URLs</b>
+Get-MgServicePrincipal -Filter "displayName eq 'ClassLink'" |
+  Select-Object id,appId,displayName,preferredSingleSignOnMode,
+    appRoleAssignmentRequired,preferredTokenSigningKeyThumbprint,
+    notificationEmailAddresses,replyUrls,servicePrincipalNames,keyCredentials |
+  ConvertTo-Json -Depth 5
+
+<b># The affected user, to compare UPN against mail</b>
+Get-MgUser -UserId "jdoe@district.k12.st.us" -Property userPrincipalName,mail,
+  proxyAddresses,accountEnabled,userType,onPremisesSyncEnabled,
+  onPremisesImmutableId,onPremisesSamAccountName | ConvertTo-Json
+
+<b># Is the user actually assigned to the app</b>
+Get-MgUserAppRoleAssignment -UserId "jdoe@district.k12.st.us" | ConvertTo-Json -Depth 3
+
+<b># Recent sign-ins for the app (needs Entra ID P1 or P2)</b>
+Get-MgAuditLogSignIn -Filter "appId eq 'APP-GUID'" -Top 15 | ConvertTo-Json -Depth 5</pre>
+    <p>Graph Explorer equivalents, if they prefer clicking:</p>
+    <pre class="snip">GET /v1.0/servicePrincipals?$filter=startswith(displayName,'ClassLink')
+GET /v1.0/users/USER?$select=userPrincipalName,mail,proxyAddresses,accountEnabled,userType,onPremisesSyncEnabled,onPremisesImmutableId
+GET /v1.0/users/USER/appRoleAssignments
+GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
+  </div>
+
+  <div class="card notes">
+    <h2>Why this page cannot borrow a Graph Explorer session</h2>
+    <p>A reasonable thought, since Graph Explorer needs no app registration of your own. It cannot work, for three separate reasons:</p>
+    <ul>
+      <li><b>Same-origin policy.</b> Graph Explorer's token sits in browser storage under <code>developer.microsoft.com</code>. This page is a different origin and cannot read it. That boundary is the thing keeping every other site out of your session too.</li>
+      <li><b>The token belongs to a different app.</b> It was issued to Graph Explorer's own first-party client ID, and the consent the user granted was granted to that app. Using it from here would be spending someone else's consent.</li>
+      <li><b>There is no broker API.</b> Graph Explorer is a client of Graph, not an identity provider, so there is nothing to delegate through.</li>
+    </ul>
+    <p>Setting the client ID field to Graph Explorer's application ID does not work either. Its registration does not list this page as a redirect URI, so you get AADSTS50011 straight away, and impersonating a Microsoft first-party registration is not a road worth starting down.</p>
+    <p>What the page does instead is build the query, copy it, and open Graph Explorer so the district can run it in one paste. The Share link format Graph Explorer produces is not a documented API, so the deep link is best effort; the clipboard copy is the part that reliably works. Test it once and if the prefill stops working, the query is still on the clipboard.</p>
+  </div>
+
+  <div class="card notes">
+    <h2>Option B — the district registers their own app</h2>
+    <p>This is usually the easiest yes. The district creates a single-page app registration in their own tenant, pastes the client ID and their tenant ID into the fields on the Live tenant tab, and gets the full live checks without extending any trust to a vendor. Their app, their tenant, their consent, their revoke button. Nothing to security review on your side because you are not asking for anything.</p>
+    <ol>
+      <li>Entra admin center &rarr; App registrations &rarr; New registration. Any name. Accounts in this organizational directory only.</li>
+      <li>Redirect URI: platform <b>Single-page application</b>, value is the exact URL of this page.</li>
+      <li>API permissions &rarr; Microsoft Graph &rarr; Delegated: the four scopes in the table below. Then <b>Grant admin consent</b>.</li>
+      <li>Copy the Application (client) ID and the Directory (tenant) ID from the Overview blade into the fields above.</li>
+      <li>No client secret. This is a public client and does not need one.</li>
+    </ol>
+    <p>Client ID and tenant ID are public identifiers, not credentials, so this page keeps them in <code>localStorage</code> to save retyping. Tokens are held in <code>sessionStorage</code> and never persist past the tab. <b>Forget these IDs</b> clears the stored config.</p>
+  </div>
+
+  <div class="card notes">
+    <h2>Option C — a multi-tenant app you own, if it gets approved</h2>
+    <p>Same mechanics as Option B, except the registration lives in your tenant and every district has to consent it. That buys you a one-time setup instead of per-district setup, and costs you a security review, publisher verification, and a harder conversation. Set <code>DEFAULT_CLIENT_ID</code> in the script block to prefill it.</p>
+    <h3>App registration</h3>
+    <ol>
+      <li>Register the app in <b>your own</b> tenant. Supported account types: <em>Accounts in any organizational directory</em>.</li>
+      <li>Add a <b>Single-page application</b> redirect URI with this page's exact URL. Registering it as <em>Web</em> instead is the single most common mistake and produces AADSTS9002326 about cross-origin token redemption.</li>
+      <li>Complete <b>publisher verification</b> so the consent screen shows your company as verified, and set the privacy statement and terms URLs.</li>
+      <li>Add the delegated permissions below. Do not request <code>offline_access</code>. Without it there is no refresh token, so the session dies with the tab.</li>
+    </ol>
+    <h3>Permissions, and what each one buys</h3>
+    <div style="overflow-x:auto"><table class="claims">
+      <thead><tr><th>Delegated scope</th><th>Unlocks</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Application.Read.All</td><td>SSO mode, entity IDs, reply URLs, signing certificates and expiry, assignment requirement</td><td>Admin consent. The workhorse.</td></tr>
+        <tr><td>User.Read.All</td><td>UPN versus mail, account enabled, guest status, on-prem sync state</td><td>Admin consent.</td></tr>
+        <tr><td>Directory.Read.All</td><td>App role assignments and group resolution</td><td>Admin consent. Broadest of the set. Drop it if you can live without the assignment check.</td></tr>
+        <tr><td>AuditLog.Read.All</td><td>Sign-in logs with failure reason and correlation ID</td><td>Admin consent. Requires Entra ID P1 or P2, so districts on A1 will get a 403 here.</td></tr>
+        <tr><td>Policy.Read.All</td><td>Conditional Access policies scoped to the app</td><td>Admin consent. Optional.</td></tr>
+      </tbody>
+    </table></div>
+    <h3>Admin consent</h3>
+    <p>Every scope above needs an administrator. Either the district admin ticks <em>Consent on behalf of your organization</em> at first sign-in, or you send a consent link ahead of the call:</p>
+    <pre class="snip">https://login.microsoftonline.com/<b>{district-tenant-id}</b>/adminconsent?client_id=<b>{your-client-id}</b>&redirect_uri=<b>{this-page-url}</b></pre>
+    <p>Either way, tell them plainly that consent is tenant-wide and persists until revoked, and show them where to revoke it: Entra admin center &rarr; Enterprise applications &rarr; your app &rarr; Permissions, or delete the service principal outright. Offering the revocation path unprompted is what makes the ask credible.</p>
+    <h3>What this page does with the token</h3>
+    <ul>
+      <li>MSAL cache is <code>sessionStorage</code>, so closing the tab discards it. No <code>localStorage</code>.</li>
+      <li>No refresh token is requested, so a session cannot outlive roughly an hour.</li>
+      <li>Every call is a GET. There is no write path anywhere in this file.</li>
+      <li><b>End session</b> clears the cache and signs out.</li>
+    </ul>
+  </div>
+</section>
+
+<div class="warnbox">
+  <b>Before you paste or pull a real one.</b> Assertions and tokens are live credentials, and directory output names real staff and students. Nothing here leaves your browser, but the value still sits in your clipboard, your scrollback, and any screenshot taken on a call. Use test accounts where you can, and treat captured production output as student data.
+</div>
+
+<p class="foot">
+  Static page, no backend, no analytics, no storage. Outbound requests happen only when you sign in to a tenant or run the optional token signature check, and go to Microsoft endpoints.<br>
+  Experimental tool. Intended to augment, not replace, standard Entra admin center and Graph Explorer workflows.
+</p>
+
+  </div>
+</main>
+</div>
+
+<script>
+/* =====================================================================
+   CONFIGURE ME
+   DEFAULT_CLIENT_ID prefills the client ID field. Leave it empty and
+   whoever is using the page can supply their own app registration,
+   including the district's own. See the Setup tab.
+   ===================================================================== */
+const DEFAULT_CLIENT_ID = "";
+const DEFAULT_TENANT_ID = "";
+const SCOPES = ["Application.Read.All","User.Read.All","Directory.Read.All","AuditLog.Read.All"];
+/* =================================================================== */
+
+/* Client ID and tenant ID are public identifiers, not secrets, so they
+   live in localStorage to save retyping. Tokens never do: MSAL is
+   pinned to sessionStorage below. */
+const CFG_KEY = 'fedbench.cfg';
+function loadCfg(){
+  let c={};
+  try{ c=JSON.parse(localStorage.getItem(CFG_KEY)||'{}'); }catch(e){}
+  return { clientId: c.clientId||DEFAULT_CLIENT_ID, tenantId: c.tenantId||DEFAULT_TENANT_ID };
+}
+function saveCfg(){
+  try{ localStorage.setItem(CFG_KEY, JSON.stringify({
+    clientId: $('cfgClient').value.trim(), tenantId: $('cfgTenant').value.trim()
+  })); }catch(e){}
+}
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function findRow(state, key, value, note){
+  return `<div class="find"><div class="dot" data-state="${state}">${
+    {pass:'OK',warn:'!',fail:'\u00d7',info:'\u2022',na:'\u2013'}[state]
+  }</div><div class="k">${esc(key)}</div><div class="v">${value||''}${note?`<span class="note">${note}</span>`:''}</div></div>`;
+}
+const card = (t,r) => `<div class="card"><h2>${esc(t)}</h2>${r||'<p class="empty">Nothing to report.</p>'}</div>`;
+const strip = (segs,label) => `<div class="strip" id="stripNode">${segs.map(s=>
+  `<div class="seg" data-state="${s.state}"><em>${esc(s.tag)}</em><span></span></div>`).join('')
+  }</div><p class="striplabel">${esc(label)}</p>`;
+const animateStrip = () =>
+  document.querySelectorAll('#stripNode .seg').forEach((s,i)=>setTimeout(()=>s.classList.add('in'), i*45));
+const WORST = ['na','info','pass','warn','fail'];
+const roll = l => l.reduce((a,b)=> WORST.indexOf(b)>WORST.indexOf(a)?b:a,'na');
+function ago(ms){const s=Math.round(Math.abs(ms)/1000);
+  if(s<90)return s+'s'; if(s<5400)return Math.round(s/60)+'m'; return (s/3600).toFixed(1)+'h';}
+function windowState(nb,noa,now){
+  if(nb&&now<nb.getTime())return['fail','not valid yet, starts in '+ago(nb-now)];
+  if(noa&&now>noa.getTime())return['fail','expired '+ago(now-noa)+' ago'];
+  if(noa)return['pass','valid for another '+ago(noa-now)];
+  return['info','no window asserted'];
+}
+function b64bytes(s){
+  s=s.replace(/\s+/g,'').replace(/-/g,'+').replace(/_/g,'/');
+  while(s.length%4)s+='=';
+  const bin=atob(s), out=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);
+  return out;
+}
+const dec=new TextDecoder('utf-8');
+const dt = s => { const d=new Date(s); return isNaN(d)?null:d; };
+const daysLeft = d => (d - Date.now())/86400000;
+
+document.querySelectorAll('.chan').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.chan').forEach(b=>{
+      const on=b===btn;
+      b.setAttribute('aria-selected',on);
+      $(b.dataset.panel).classList.toggle('hidden',!on);
+    });
+    if(btn.dataset.title) $('pageTitle').textContent=btn.dataset.title;
+    window.scrollTo({top:0,behavior:'instant'});
+  });
+});
+$('collapseBtn').addEventListener('click',()=>$('shell').classList.toggle('collapsed'));
+
+/* ==================== auth ==================== */
+let msalApp=null, account=null;
+const NOT_SIGNED = 'Not signed in. The district administrator signs in with their own account; this page never sees a password and asks only for read permissions.';
+
+async function initAuth(){
+  const cfg=loadCfg();
+  $('cfgClient').value=cfg.clientId;
+  $('cfgTenant').value=cfg.tenantId;
+  ['cfgClient','cfgTenant'].forEach(id=>$(id).addEventListener('change',()=>{
+    saveCfg(); msalApp=null; account=null; buildAuth();
+  }));
+  $('cfgForget').addEventListener('click',()=>{
+    try{ localStorage.removeItem(CFG_KEY); }catch(e){}
+    $('cfgClient').value=''; $('cfgTenant').value='';
+    msalApp=null; account=null; buildAuth();
+  });
+  await buildAuth();
+}
+
+async function buildAuth(){
+  const clientId=$('cfgClient').value.trim();
+  const tenantId=$('cfgTenant').value.trim();
+  if(!clientId){
+    $('signIn').disabled=true;
+    $('modeHint').textContent='Sign-in not configured';
+    $('who').innerHTML='No client ID yet. Either supply one above, or use <b>Use pasted output instead</b> below. The <b>Setup</b> tab explains both routes.';
+    paintSession(); return;
+  }
+  if(typeof msal==='undefined'){
+    $('signIn').disabled=true;
+    $('who').textContent='The MSAL library did not load. Check the script tag or your network.';
+    return;
+  }
+  $('modeHint').textContent='Read-only, delegated, expires with this tab';
+  msalApp = new msal.PublicClientApplication({
+    auth:{
+      clientId,
+      authority:'https://login.microsoftonline.com/'+(tenantId||'organizations'),
+      redirectUri:location.origin+location.pathname
+    },
+    cache:{cacheLocation:'sessionStorage', storeAuthStateInCookie:false}
+  });
+  await msalApp.initialize();
+  const r = await msalApp.handleRedirectPromise();
+  if(r&&r.account) account=r.account;
+  else { const a=msalApp.getAllAccounts(); if(a.length) account=a[0]; }
+  paintSession();
+}
+function setPill(live, label){
+  const p=$('sessionPill');
+  p.classList.toggle('live',!!live);
+  const b=p.querySelector('b');
+  if(b) b.textContent=label;
+  p.title = live ? 'Signed in, read-only session' : label;
+}
+function paintSession(){
+  const on=!!account;
+  $('signIn').classList.toggle('hidden',on);
+  $('signIn').disabled=!$('cfgClient').value.trim();
+  $('signOut').classList.toggle('hidden',!on);
+  $('runChecks').disabled=!on;
+  if(!on && !$('cfgClient').value.trim()) { setPill(false,'Not configured'); return; }
+  setPill(on, on?account.username:'Not signed in');
+  $('who').innerHTML = on
+    ? `Signed in as <b>${esc(account.username)}</b> &middot; tenant <b>${esc(account.tenantId||'')}</b> &middot; read-only, no refresh token`
+    : NOT_SIGNED;
+}
+$('signIn').addEventListener('click', async ()=>{
+  try{
+    const r = await msalApp.loginPopup({scopes:SCOPES, prompt:'select_account'});
+    account=r.account; paintSession();
+  }catch(e){
+    $('liveOut').innerHTML = card('Sign-in failed', findRow('fail','MSAL', esc(e.message),
+      /9002326/.test(e.message)
+        ? 'The redirect URI is registered under the <b>Web</b> platform. Move it to <b>Single-page application</b> on the app registration.'
+        : 'If this mentions consent, an administrator has to approve the permissions. The Setup tab has the admin consent URL.'));
+  }
+});
+$('signOut').addEventListener('click', async ()=>{
+  const a=account; account=null; paintSession(); $('liveOut').innerHTML='';
+  try{ sessionStorage.clear(); await msalApp.logoutPopup({account:a}); }catch(e){}
+});
+async function token(){
+  try{ return (await msalApp.acquireTokenSilent({scopes:SCOPES, account})).accessToken; }
+  catch(e){ return (await msalApp.acquireTokenPopup({scopes:SCOPES})).accessToken; }
+}
+async function g(path){
+  const t=await token();
+  const res=await fetch('https://graph.microsoft.com/v1.0'+path,{headers:{Authorization:'Bearer '+t}});
+  const body=await res.json().catch(()=>({}));
+  if(!res.ok){
+    const err=body.error||{};
+    const e=new Error(err.message||(res.status+' '+res.statusText));
+    e.code=err.code; e.status=res.status; throw e;
+  }
+  return body;
+}
+function graphHint(e){
+  const m=(e.message||'')+' '+(e.code||'');
+  if(e.status===403 && /premium|license|P1|P2/i.test(m))
+    return 'This usually means the tenant is on Entra ID Free. The sign-in log API needs P1 or P2. Have them read the logs in the portal and paste the failure reason instead.';
+  if(e.status===403) return 'Permission denied. Either the consented scopes do not cover this, or the signed-in account lacks the directory role. Reader-level roles are enough for all of these reads.';
+  if(e.status===401) return 'The token was rejected. End the session and sign in again.';
+  if(e.status===404) return 'Not found in this tenant. Check the spelling, and check whether the object lives in a different tenant.';
+  if(e.status===400) return 'Graph rejected the query. Often a quoting problem in a name containing an apostrophe.';
+  return '';
+}
+
+/* ==================== analysis shared by live and paste ==================== */
+function analyseServicePrincipal(sp){
+  const st={}; let rows='';
+  rows+=findRow('info','Application',`<code>${esc(sp.displayName||'—')}</code>`,
+    `App ID <code>${esc(sp.appId||'—')}</code> &middot; object ID <code>${esc(sp.id||'—')}</code>`);
+  const mode=sp.preferredSingleSignOnMode;
+  st.sso = mode==='saml'?'pass' : (mode==='oidc'||mode==='password'||mode==='linked')?'info' : 'warn';
+  rows+=findRow(st.sso,'SSO mode',`<code>${esc(mode||'not set')}</code>`,
+    mode?'':'No single sign-on mode configured on this enterprise app. If the district thinks SAML is set up, they may have configured a different app instance. Duplicate apps with similar names are common.');
+  if(sp.accountEnabled===false)
+    rows+=findRow('fail','Enabled','no','The service principal is disabled, so every sign-in fails regardless of the rest.');
+  const ids=(sp.servicePrincipalNames||[]).filter(x=>x!==sp.appId);
+  st.aud = ids.length?'info':'warn';
+  rows+=findRow(st.aud,'Entity IDs', ids.length?ids.map(x=>`<code>${esc(x)}</code>`).join('<br>'):'only the app ID',
+    'Compare against what the SP expects as its audience, character for character.');
+  const urls=sp.replyUrls||[];
+  rows+=findRow(urls.length?'info':'warn','Reply URLs',
+    urls.length?urls.map(u=>`<code>${esc(u)}</code>`).join('<br>'):'none registered',
+    'The assertion Destination has to be one of these. A mismatch is AADSTS50011.');
+  if(sp.loginUrl) rows+=findRow('info','Sign-on URL',`<code>${esc(sp.loginUrl)}</code>`);
+  st.assign = sp.appRoleAssignmentRequired?'warn':'info';
+  rows+=findRow(st.assign,'Assignment required', sp.appRoleAssignmentRequired?'yes':'no',
+    sp.appRoleAssignmentRequired
+      ? 'Only assigned users and groups can sign in. Anyone outside gets AADSTS50105 before an assertion is ever issued. This is the most common cause of "it works for me but not for them".'
+      : 'Any licensed user in the tenant can sign in.');
+  const notif=sp.notificationEmailAddresses||[];
+  rows+=findRow(notif.length?'pass':'warn','Certificate notices',
+    notif.length?notif.map(esc).join(', '):'nobody',
+    notif.length?'':'No notification address, so nobody in the district gets warned before the signing certificate expires. This is how integrations die quietly over a break.');
+  if(sp.tokenEncryptionKeyId)
+    rows+=findRow('warn','Token encryption','enabled',
+      'Assertions are encrypted, so they cannot be read from a browser capture. Turn it off for the duration of a test, or work from the SP logs.');
+
+  const certs=(sp.keyCredentials||[]).filter(k=>k.usage==='Verify'||k.type==='AsymmetricX509Cert');
+  const active=(sp.preferredTokenSigningKeyThumbprint||'').toUpperCase().replace(/[^0-9A-F]/g,'');
+  let certRows='';
+  if(!certs.length){
+    st.cert='warn';
+    certRows=findRow('warn','Signing certificates','none returned',
+      'Either SAML is not configured or the reader lacks permission to see key credentials.');
+  } else {
+    let worst='pass';
+    certs.sort((a,b)=> new Date(b.endDateTime||0)-new Date(a.endDateTime||0));
+    certs.forEach(k=>{
+      const end=dt(k.endDateTime);
+      const tp=(k.customKeyIdentifier||'').toUpperCase();
+      const isActive = active && tp.replace(/[^0-9A-F]/g,'')===active;
+      const d = end?daysLeft(end):null;
+      let s='info';
+      if(isActive){
+        s = d===null?'info' : d<0?'fail' : d<45?'warn':'pass';
+        if(WORST.indexOf(s)>WORST.indexOf(worst)) worst=s;
+      }
+      certRows+=findRow(s, isActive?'Active certificate':'Other certificate',
+        `<code>${esc(tp||'thumbprint unavailable')}</code>`,
+        `${k.displayName?esc(k.displayName)+' &middot; ':''}expires <code>${end?esc(end.toISOString().slice(0,10)):'unknown'}</code>${
+          d!==null ? (d<0?` &middot; <b>expired ${Math.abs(Math.round(d))} days ago</b>` : ` &middot; ${Math.round(d)} days left`) : ''}${
+          isActive?'<br><b>This is the thumbprint Entra signs with.</b> It must match what the SP has pinned. If the SP holds a different one, that is your outage.':''}`);
+    });
+    st.cert=worst;
+    if(!active) certRows+=findRow('warn','Active key','not indicated',
+      'The tenant did not report a preferred signing key thumbprint, so you cannot tell from here which certificate is in use. Check the SAML certificates blade.');
+  }
+  return {rows, certRows, st, sp};
+}
+
+function analyseUser(u){
+  const st={}; let rows='';
+  rows+=findRow('info','User',`<code>${esc(u.userPrincipalName||u.id||'—')}</code>`, esc(u.displayName||''));
+  if(u.accountEnabled===false){
+    st.user='fail';
+    rows+=findRow('fail','Account enabled','no','Disabled account. Nothing downstream works. AADSTS50057.');
+  } else st.user='pass';
+  if(u.userType==='Guest')
+    rows+=findRow('warn','User type','Guest',
+      'A B2B guest. Guests hit a different set of failures, notably AADSTS50020 when the SP sends them to the wrong tenant authority.');
+  const upn=u.userPrincipalName||'', mail=u.mail||'';
+  const same = upn&&mail&&upn.toLowerCase()===mail.toLowerCase();
+  st.nameid = mail?(same?'pass':'warn'):'fail';
+  rows+=findRow(st.nameid,'UPN vs mail',
+    `<code>${esc(upn||'—')}</code><br><code>${esc(mail||'no mail value')}</code>`,
+    !mail ? 'This user has no mail attribute. Any claim sourced from <code>user.mail</code> comes out empty, and SPs that provision on email fail on exactly this user while working for everyone else.'
+    : same ? 'Identical, so UPN-sourced and mail-sourced claims agree.'
+    : 'These differ. If the SP matches on email but Entra sends UPN as the NameID, this user will not match their existing record. Check which one the SP has on file.');
+  if(u.proxyAddresses&&u.proxyAddresses.length)
+    rows+=findRow('info','Proxy addresses',`<code>${u.proxyAddresses.slice(0,6).map(esc).join('<br>')}</code>`,
+      'Aliases. If the SP has the user under one of these rather than the primary, matching fails.');
+  if(u.onPremisesSyncEnabled)
+    rows+=findRow('info','Directory source','synced from on-premises AD',
+      `Immutable ID <code>${esc(u.onPremisesImmutableId||'—')}</code>${
+        u.onPremisesSamAccountName?` &middot; sAMAccountName <code>${esc(u.onPremisesSamAccountName)}</code>`:''
+      }. Attribute fixes have to be made in AD and wait for the next sync cycle. Editing in Entra will not stick.`);
+  else if(u.onPremisesSyncEnabled===false)
+    rows+=findRow('info','Directory source','cloud only','Attributes are editable directly in Entra.');
+  return {rows, st, u};
+}
+
+function analyseAssignments(list, sp){
+  if(!sp) return {rows:findRow('info','Assignment check','app configuration not loaded',
+    'Paste the service principal first so this can be compared against it.'), st:{}};
+  if(!sp.appRoleAssignmentRequired) return {rows:findRow('na','Assignment check','not required',
+    'The app allows any user in the tenant, so assignment is not the problem.'), st:{}};
+  const hit=(list||[]).find(a=> a.resourceId===sp.id || a.resourceDisplayName===sp.displayName);
+  return {
+    rows: findRow(hit?'pass':'fail','Assigned to app', hit?'yes':'no',
+      hit ? 'Assignment is not the blocker.'
+          : 'The app requires assignment and this user has none, directly or through a group. This produces AADSTS50105 and no assertion is issued at all. Assign the user or their group on the enterprise app.'),
+    st:{assigned: hit?'pass':'fail'}
+  };
+}
+
+function analyseSignIns(items){
+  if(!items||!items.length) return {rows:findRow('na','Sign-in log','no matching entries',
+    'Either the sign-in has not happened in the retained window, or the filter did not match. Entra ID Free tenants cannot serve this API at all.'), st:{}};
+  let worst='pass';
+  let t='<div style="overflow-x:auto"><table class="claims"><thead><tr><th>When (UTC)</th><th>Status</th><th>User</th><th>Detail</th><th>Correlation ID</th></tr></thead><tbody>';
+  items.slice(0,15).forEach(s=>{
+    const code=(s.status&&s.status.errorCode)||0, ok=code===0;
+    if(!ok) worst='fail';
+    const ca=s.conditionalAccessStatus;
+    const pols=(s.appliedConditionalAccessPolicies||[])
+      .filter(p=>p.result==='failure').map(p=>p.displayName).join('; ');
+    t+=`<tr><td>${esc((s.createdDateTime||'').replace('T',' ').slice(0,19))}</td>`+
+       `<td class="st-${ok?'pass':'fail'}">${ok?'success':'AADSTS'+code}</td>`+
+       `<td>${esc(s.userPrincipalName||'')}</td>`+
+       `<td>${esc(((s.status&&s.status.failureReason)||'').slice(0,180))}${
+          ca&&ca!=='notApplied'?`<br>CA: ${esc(ca)}${pols?' — blocked by '+esc(pols):''}`:''}</td>`+
+       `<td>${esc(s.correlationId||'')}</td></tr>`;
+  });
+  t+='</tbody></table></div>';
+  t+=findRow(worst,'Escalation','Send the SP the correlation ID plus the UTC timestamp',
+    'That pair lets them find the same transaction in their own logs. A screenshot of the browser error does not.');
+  return {rows:t, st:{signin:worst}};
+}
+
+function renderLive(parts){
+  const segs=[], sections=[];
+  if(parts.spa){
+    sections.push(card('Application configuration', parts.spa.rows));
+    sections.push(card('SAML signing certificates', parts.spa.certRows));
+    segs.push({tag:'app',state:parts.spa.st.sso||'na'},{tag:'cert',state:parts.spa.st.cert||'na'});
+  }
+  if(parts.usr){
+    sections.push(card('User object', parts.usr.rows));
+    segs.push({tag:'user',state:parts.usr.st.user||'na'},{tag:'name',state:parts.usr.st.nameid||'na'});
+  }
+  if(parts.asg){
+    sections.push(card('Application assignment', parts.asg.rows));
+    segs.push({tag:'asgn',state:parts.asg.st.assigned||'na'});
+  }
+  if(parts.log){
+    sections.push(card('Recent sign-ins', parts.log.rows));
+    segs.push({tag:'logs',state:parts.log.st.signin||'na'});
+  }
+  if(parts.errors) sections.unshift(card('Could not read everything', parts.errors));
+  if(!segs.length&&!parts.errors) return card('Nothing recognised','<p class="empty">No usable data.</p>');
+  const worst=roll(segs.map(s=>s.state));
+  const label={fail:'A check failed. Start with the red segment.',warn:'Nothing fatal, but read the flagged rows.',
+    pass:'Tenant-side configuration looks coherent.',info:'Read below.',na:'Read below.'}[worst];
+  return (segs.length?strip(segs,label):'')+sections.join('');
+}
+
+/* ==================== live run ==================== */
+$('runChecks').addEventListener('click', async ()=>{
+  const btn=$('runChecks'); btn.disabled=true; btn.textContent='Reading…';
+  const parts={}; let errors='';
+  const appQ=$('qApp').value.trim(), userQ=$('qUser').value.trim();
+  const GUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const SEL='id,appId,displayName,accountEnabled,preferredSingleSignOnMode,appRoleAssignmentRequired,'+
+    'preferredTokenSigningKeyThumbprint,notificationEmailAddresses,replyUrls,servicePrincipalNames,loginUrl,'+
+    'tokenEncryptionKeyId,keyCredentials';
+  let sp=null;
+
+  if(appQ){
+    try{
+      const q = GUID.test(appQ)
+        ? `/servicePrincipals?$filter=appId eq '${appQ}'&$select=${SEL}`
+        : `/servicePrincipals?$filter=startswith(displayName,'${appQ.replace(/'/g,"''")}')&$select=${SEL}&$top=10`;
+      const list=(await g(q)).value||[];
+      if(!list.length) errors+=findRow('fail','Application',`no match for <code>${esc(appQ)}</code>`,
+        'Check the display name under Enterprise applications. Names are often suffixed, like "ClassLink SSO" or "ClassLink - Staff".');
+      else{
+        sp=list[0];
+        if(list.length>1) errors+=findRow('warn','Multiple apps matched',
+          list.map(x=>`<code>${esc(x.displayName)}</code>`).join('<br>'),
+          'Analysing the first. Duplicate or near-duplicate enterprise apps are a real cause of "we configured it and nothing changed", because the district edits one and signs in through another.');
+        parts.spa=analyseServicePrincipal(sp);
+      }
+    }catch(e){ errors+=findRow('fail','Application read',esc(e.message),graphHint(e)); }
+  }
+
+  if(userQ){
+    try{
+      const u=await g(`/users/${encodeURIComponent(userQ)}?$select=id,displayName,userPrincipalName,mail,proxyAddresses,accountEnabled,userType,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesSamAccountName`);
+      parts.usr=analyseUser(u);
+      try{
+        const a=await g(`/users/${encodeURIComponent(userQ)}/appRoleAssignments`);
+        parts.asg=analyseAssignments(a.value, sp);
+      }catch(e){ errors+=findRow('warn','Assignment read',esc(e.message),graphHint(e)); }
+    }catch(e){ errors+=findRow('fail','User read',esc(e.message),graphHint(e)); }
+  }
+
+  if(sp){
+    try{
+      let f=`appId eq '${sp.appId}'`;
+      if(userQ) f+=` and userPrincipalName eq '${userQ.replace(/'/g,"''")}'`;
+      const l=await g(`/auditLogs/signIns?$filter=${encodeURIComponent(f)}&$top=15`);
+      parts.log=analyseSignIns(l.value);
+    }catch(e){ errors+=findRow('warn','Sign-in log read',esc(e.message),graphHint(e)); }
+  }
+
+  if(errors) parts.errors=errors;
+  $('liveOut').innerHTML=renderLive(parts); animateStrip();
+  btn.disabled=false; btn.textContent='Run checks';
+});
+
+/* ==================== paste mode ==================== */
+$('pasteMode').addEventListener('click',()=>{
+  const p=$('pastePanel'); p.classList.toggle('hidden');
+  $('pasteMode').textContent = p.classList.contains('hidden')?'Use pasted output instead':'Hide paste panel';
+});
+$('pasteClear').addEventListener('click',()=>{ $('pasteIn').value=''; $('liveOut').innerHTML=''; });
+
+/* Hand a query off to Graph Explorer. The Share button's URL format is
+   not a documented API, so the deep link is best effort and the
+   clipboard copy is the part that is guaranteed to work. */
+const GE_BASE='https://developer.microsoft.com/en-us/graph/graph-explorer';
+document.querySelectorAll('[data-ge]').forEach(btn=>{
+  btn.addEventListener('click', async ()=>{
+    const app=$('qApp').value.trim(), user=$('qUser').value.trim();
+    const GUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let path=btn.dataset.ge
+      .replace(/APP_NAME/g, app.replace(/'/g,"''") || 'APP_NAME')
+      .replace(/APP_GUID/g, GUID.test(app)?app:'APP_GUID')
+      .replace(/USER/g, user?encodeURIComponent(user):'USER');
+    const full='https://graph.microsoft.com/v1.0'+path;
+    let copied=false;
+    try{ await navigator.clipboard.writeText(full); copied=true; }catch(e){}
+    const note=$('geNote');
+    const left=[];
+    if(/APP_NAME|APP_GUID/.test(path)) left.push('application');
+    if(/\bUSER\b/.test(path)) left.push('user');
+    note.innerHTML = (copied?'Copied. ':'Copy failed, so paste from the box below. ')+
+      (left.length?`Fill in the <b>${left.join('</b> and <b>')}</b> placeholder before running it.`
+                 :'Paste it into the request bar and Run query.');
+    if(!copied){
+      $('liveOut').innerHTML=card('Query to run in Graph Explorer',
+        `<div style="padding:13px"><pre class="mono" style="margin:0;white-space:pre-wrap">${esc(full)}</pre></div>`);
+    }
+    window.open(GE_BASE+'?request='+encodeURIComponent(path.replace(/^\//,''))+'&method=GET&version=v1.0',
+      '_blank','noopener');
+  });
+});
+
+let pastedSp=null;
+$('pasteGo').addEventListener('click',()=>{
+  let j;
+  try{ j=JSON.parse($('pasteIn').value); }
+  catch(e){
+    $('liveOut').innerHTML=card('Could not parse',findRow('fail','JSON',esc(e.message),
+      'Paste the whole response including the outer braces. PowerShell needs <code>ConvertTo-Json -Depth 5</code> or nested values come out as type names.'));
+    return;
+  }
+  const ctx=String(j['@odata.context']||'');
+  const items=Array.isArray(j)?j:(Array.isArray(j.value)?j.value:[j]);
+  const one=items[0]||{};
+  const parts={};
+  const looksSp   = /servicePrincipals/i.test(ctx) || one.servicePrincipalNames!==undefined || one.preferredSingleSignOnMode!==undefined || one.appRoleAssignmentRequired!==undefined;
+  const looksLog  = /signIns/i.test(ctx) || (one.correlationId!==undefined && one.status!==undefined);
+  const looksAsg  = /appRoleAssignments/i.test(ctx) || (one.resourceId!==undefined && one.principalId!==undefined);
+  const looksUser = /users/i.test(ctx) || one.userPrincipalName!==undefined;
+
+  if(looksSp){ pastedSp=one; parts.spa=analyseServicePrincipal(one); }
+  else if(looksLog){ parts.log=analyseSignIns(items); }
+  else if(looksAsg){ parts.asg=analyseAssignments(items,pastedSp); }
+  else if(looksUser){ parts.usr=analyseUser(one); }
+  else{
+    $('liveOut').innerHTML=card('Shape not recognised',findRow('warn','Detector','Could not tell what this is.',
+      'Recognised shapes are a service principal, a user, appRoleAssignments, and signIns. Paste one response at a time rather than a combined object.'));
+    return;
+  }
+  $('liveOut').innerHTML = renderLive(parts) + (looksSp
+    ? card('Next', findRow('info','Order to paste in','User, then appRoleAssignments, then the sign-in log.',
+        'The app configuration stays in memory, so the assignment check can compare against it.')) : '');
+  animateStrip();
+});
+
+/* ================= SAML ================= */
+function decodeSaml(raw){
+  raw=raw.trim();
+  if(!raw) throw new Error('Paste a SAML message first.');
+  if(raw.startsWith('<')) return {xml:raw,how:'raw XML'};
+  let d=raw;
+  if(/%[0-9A-Fa-f]{2}/.test(raw)){ try{ d=decodeURIComponent(raw); }catch(e){} }
+  const bytes=b64bytes(d);
+  const asText=dec.decode(bytes);
+  if(asText.trimStart().startsWith('<')) return {xml:asText,how:'base64 (HTTP POST binding)'};
+  if(window.pako){
+    for(const [fn,label] of [[pako.inflateRaw,'base64 + raw DEFLATE (HTTP Redirect binding)'],[pako.inflate,'base64 + zlib']]){
+      try{ const s=dec.decode(fn(bytes)); if(s.trimStart().startsWith('<')) return {xml:s,how:label}; }catch(e){}
+    }
+  }
+  throw new Error('Decoded, but the result is not XML. Check that you copied the full value and not the field name with it.');
+}
+const L=(n,name)=>Array.from(n.getElementsByTagNameNS('*',name));
+const first=(n,name)=>L(n,name)[0]||null;
+const txt=n=>n?n.textContent.trim():'';
+const CLAIM_SHORT={
+ 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress':'email',
+ 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname':'givenName',
+ 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname':'surname',
+ 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name':'name (UPN)',
+ 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier':'nameIdentifier',
+ 'http://schemas.microsoft.com/identity/claims/objectidentifier':'oid',
+ 'http://schemas.microsoft.com/identity/claims/tenantid':'tid',
+ 'http://schemas.microsoft.com/identity/claims/displayname':'displayName',
+ 'http://schemas.microsoft.com/identity/claims/identityprovider':'idp',
+ 'http://schemas.microsoft.com/ws/2008/06/identity/claims/groups':'groups',
+ 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role':'role'
+};
+async function thumbprints(der){
+  const o={};
+  for(const alg of ['SHA-1','SHA-256']){
+    try{ const h=await crypto.subtle.digest(alg,der);
+      o[alg]=Array.from(new Uint8Array(h)).map(b=>b.toString(16).padStart(2,'0')).join('').toUpperCase();
+    }catch(e){}
+  }
+  return o;
+}
+function certValidity(der){
+  for(let i=0;i<der.length-32;i++){
+    if(der[i]===0x30&&der[i+1]===0x1E&&der[i+2]===0x17&&der[i+3]===0x0D&&der[i+17]===0x17&&der[i+18]===0x0D){
+      const rd=o=>{let s='';for(let j=0;j<13;j++)s+=String.fromCharCode(der[o+j]);
+        const yy=+s.slice(0,2),y=yy<50?2000+yy:1900+yy;
+        return new Date(Date.UTC(y,+s.slice(2,4)-1,+s.slice(4,6),+s.slice(6,8),+s.slice(8,10),+s.slice(10,12)));};
+      return {from:rd(i+4),to:rd(i+19)};
+    }
+  }
+  return null;
+}
+async function inspectSaml(){
+  const out=$('samlOut'); let xml,how;
+  try{ ({xml,how}=decodeSaml($('samlIn').value)); }
+  catch(e){ out.innerHTML=card('Could not decode',findRow('fail','Decoder',esc(e.message))); return; }
+  const doc=new DOMParser().parseFromString(xml,'application/xml');
+  if(doc.getElementsByTagName('parsererror').length){
+    out.innerHTML=card('Could not parse',findRow('fail','XML','Decoded but not well-formed. It may be truncated.')); return;
+  }
+  const root=doc.documentElement, kind=root.localName, now=Date.now(), states={};
+  let html='',rows='';
+  rows+=findRow('info','Message type',`<code>${esc(kind)}</code>`,'Encoded as '+esc(how));
+  const dest=root.getAttribute('Destination');
+  rows+=findRow(dest?'info':'na','Destination',dest?`<code>${esc(dest)}</code>`:'not present',
+    dest?'Must be a registered reply URL. A mismatch is AADSTS50011.':'');
+  const irt=root.getAttribute('InResponseTo');
+  rows+=findRow(irt?'info':'warn','InResponseTo',irt?`<code>${esc(irt)}</code>`:'absent',
+    irt?'SP-initiated flow.':'IdP-initiated flow. SPs configured for SP-initiated only will reject an unsolicited response.');
+  const ii=dt(root.getAttribute('IssueInstant'));
+  rows+=findRow(ii?'info':'na','Issued',ii?`<code>${esc(ii.toISOString())}</code>`:'unknown',ii?`${ago(now-ii)} before your clock.`:'');
+  html+=card('Transport',rows);
+
+  if(kind==='Response'){
+    const sc=first(root,'StatusCode'), code=sc?(sc.getAttribute('Value')||''):'';
+    const ok=code.endsWith(':Success'), msg=txt(first(root,'StatusMessage'));
+    states.status=ok?'pass':'fail';
+    let r=findRow(ok?'pass':'fail','StatusCode',`<code>${esc(code.split(':').pop()||'missing')}</code>`,
+      ok?'':`Full value <code>${esc(code)}</code>`);
+    if(msg){
+      const m=msg.match(/AADSTS(\d+)/);
+      r+=findRow('fail','StatusMessage',`<code>${esc(msg.slice(0,400))}</code>`,
+        m?`Look this up on the <b>AADSTS code</b> tab, or open <a href="https://login.microsoftonline.com/error?code=${m[1]}" target="_blank" rel="noopener">the Microsoft description</a>.`:'');
+    }
+    html+=card('Status',r);
+  } else states.status='na';
+
+  const enc=first(root,'EncryptedAssertion'), asrt=first(root,'Assertion');
+  if(enc&&!asrt){
+    states.subject='na';
+    html+=card('Assertion',findRow('warn','Encrypted','This response carries an <code>EncryptedAssertion</code>.',
+      'Decryption needs the SP private key, which this page deliberately has no access to. Turn token encryption off for a test, or work from the SP logs.'));
+  } else if(!asrt){
+    states.subject='fail';
+    html+=card('Assertion',findRow('fail','Assertion','absent','No assertion. Expected if the status was a failure.'));
+  } else {
+    rows='';
+    const iss=txt(L(root,'Issuer')[0]);
+    const tm=iss.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+    rows+=findRow(iss?'pass':'fail','Issuer',`<code>${esc(iss||'missing')}</code>`,
+      iss.includes('sts.windows.net')?(tm?`Entra ID, tenant <code>${esc(tm[1])}</code>.`:'Entra ID SAML issuer.')
+        :'Not the usual Entra format (<code>https://sts.windows.net/{tenantId}/</code>). Confirm which IdP signed this.');
+    const auds=L(asrt,'Audience').map(txt).filter(Boolean);
+    states.audience=auds.length?'info':'fail';
+    rows+=findRow(states.audience,'Audience',auds.length?auds.map(a=>`<code>${esc(a)}</code>`).join('<br>'):'missing',
+      'Compare character for character against the SP entity ID. Trailing slash and http/https differences are the most common single cause of rejection.');
+    const nid=first(asrt,'NameID'), fmt=nid?(nid.getAttribute('Format')||''):'';
+    rows+=findRow(nid?'info':'fail','NameID',nid?`<code>${esc(txt(nid))}</code>`:'missing');
+    rows+=findRow(fmt?'info':'warn','NameID format',`<code>${esc(fmt.split(':').pop()||'not set')}</code>`,
+      /emailAddress/.test(fmt)?'Email format.'
+        :'Entra defaults to unspecified with <code>user.userprincipalname</code>. SPs expecting an email address need the format changed to <code>emailAddress</code> and often the source changed to <code>user.mail</code>.');
+    html+=card('Identity',rows);
+
+    rows='';
+    const cond=first(asrt,'Conditions');
+    const cnb=cond?dt(cond.getAttribute('NotBefore')):null, cna=cond?dt(cond.getAttribute('NotOnOrAfter')):null;
+    const [cs,cnote]=windowState(cnb,cna,now); states.time=cs;
+    rows+=findRow(cs,'Conditions window',
+      `<code>${cnb?esc(cnb.toISOString()):'—'} &rarr; ${cna?esc(cna.toISOString()):'—'}</code>`,
+      `Against your browser clock this is <b>${cnote}</b>. If the SP disagrees its server clock has drifted; most allow only a few minutes.`);
+    const scd=first(asrt,'SubjectConfirmationData');
+    if(scd){
+      const sna=dt(scd.getAttribute('NotOnOrAfter'));
+      const [ss,snote]=windowState(null,sna,now);
+      rows+=findRow(ss,'Subject confirmation',`<code>${sna?esc(sna.toISOString()):'—'}</code>`,snote+'.');
+      const rc=scd.getAttribute('Recipient');
+      if(rc) rows+=findRow('info','Recipient',`<code>${esc(rc)}</code>`,'Should equal the ACS URL.');
+    }
+    const authn=first(asrt,'AuthnStatement');
+    if(authn){
+      const ai=dt(authn.getAttribute('AuthnInstant')), ctx2=txt(first(asrt,'AuthnContextClassRef'));
+      rows+=findRow('info','Authenticated',ai?`<code>${esc(ai.toISOString())}</code>`:'unknown',
+        ctx2?`Context <code>${esc(ctx2.split(':').pop())}</code>.`:'');
+    }
+    html+=card('Timing',rows);
+
+    rows='';
+    const respSig=Array.from(root.childNodes).some(n=>n.localName==='Signature');
+    const asrtSig=Array.from(asrt.childNodes).some(n=>n.localName==='Signature');
+    states.sig=(respSig||asrtSig)?'pass':'fail';
+    rows+=findRow(states.sig,'Signed elements',
+      `<code>${respSig?'Response':''}${respSig&&asrtSig?' + ':''}${asrtSig?'Assertion':''}${!respSig&&!asrtSig?'none':''}</code>`,
+      (!respSig&&!asrtSig)?'No signature. Every SP worth trusting rejects this.'
+        :(!respSig?'Assertion only, the Entra default. If the SP requires a signed response, set <b>Signing Option</b> to <em>Sign SAML response and assertion</em>.'
+                  :'Response is signed.'));
+    const sm=first(root,'SignatureMethod');
+    if(sm){
+      const alg=(sm.getAttribute('Algorithm')||'').split('#').pop(), weak=/sha1/i.test(alg);
+      rows+=findRow(weak?'warn':'pass','Signature algorithm',`<code>${esc(alg)}</code>`,
+        weak?'SHA-1. Entra defaults to SHA-256; something set this down deliberately and some SPs now refuse it.':'');
+    }
+    const certNode=first(root,'X509Certificate');
+    if(certNode){
+      const der=b64bytes(txt(certNode)), tp=await thumbprints(der), val=certValidity(der);
+      rows+=findRow('info','Cert SHA-1 thumbprint',`<code>${esc(tp['SHA-1']||'—')}</code>`,
+        'This is what most SPs pin. Compare it against the tenant\'s active signing thumbprint on the Live tenant tab.');
+      if(tp['SHA-256']) rows+=findRow('info','Cert SHA-256',`<code>${esc(tp['SHA-256'])}</code>`);
+      if(val){
+        const d=daysLeft(val.to), st=d<0?'fail':d<30?'warn':'pass';
+        rows+=findRow(st,'Cert validity',
+          `<code>${esc(val.from.toISOString().slice(0,10))} &rarr; ${esc(val.to.toISOString().slice(0,10))}</code>`,
+          d<0?'Expired. Roll it in Entra and give the SP the new one.'
+            :d<30?`Expires in ${Math.round(d)} days. Schedule the rollover now, not on the day.`
+            :`${Math.round(d)} days remaining.`);
+      }
+      rows+=findRow('na','Cryptographic check','not performed here',
+        'Verifying an XML signature needs canonicalisation, which this page does not implement. Treat the thumbprint as a match check, not proof. The SP logs are the authority.');
+    } else rows+=findRow('warn','Certificate','not embedded','The SP must resolve the key from metadata, so no thumbprint comparison from here.');
+    html+=card('Signature',rows);
+
+    const attrs=L(asrt,'Attribute'); states.claims=attrs.length?'pass':'warn';
+    let t='';
+    if(attrs.length){
+      t='<div style="overflow-x:auto"><table class="claims"><thead><tr><th>Claim name</th><th>Reads as</th><th>Value</th></tr></thead><tbody>';
+      attrs.forEach(a=>{
+        const name=a.getAttribute('Name')||'', vals=L(a,'AttributeValue').map(txt);
+        const short=CLAIM_SHORT[name]||(name.includes('/')?'':name);
+        t+=`<tr><td>${esc(name)}</td><td class="short">${esc(short||'—')}</td><td>${esc(vals.join(', ').slice(0,300))||'<em>empty</em>'}</td></tr>`;
+      });
+      t+='</tbody></table></div>';
+      const bare=attrs.filter(a=>!(a.getAttribute('Name')||'').includes('/')).length;
+      t+=findRow(bare?'pass':'info','Naming',bare?`${bare} claim(s) use short names`:'all claims use schema URIs',
+        bare?'':'If the SP expects short names like <code>email</code>, edit them under <em>Attributes &amp; Claims</em> and clear the namespace field.');
+    }
+    html+=card(`Claims (${attrs.length})`, t||'<p class="empty">No attribute statements.</p>');
+  }
+  const segs=[{tag:'sts',state:states.status||'na'},{tag:'aud',state:states.audience||'na'},
+    {tag:'sig',state:states.sig||'na'},{tag:'exp',state:states.time||'na'},{tag:'clm',state:states.claims||'na'}];
+  const worst=roll(segs.map(s=>s.state));
+  const label={fail:'One or more checks failed. Work left to right.',warn:'Nothing fatal, but read the flagged rows.',
+    pass:'Structural checks pass. If the SP still rejects it, the disagreement is on the SP side.',
+    info:'Decoded. Review below.',na:'Decoded.'}[worst];
+  out.innerHTML=strip(segs,label)+html; animateStrip();
+}
+$('samlGo').addEventListener('click',inspectSaml);
+$('samlClear').addEventListener('click',()=>{$('samlIn').value='';$('samlOut').innerHTML='';});
+$('samlXml').addEventListener('click',()=>{
+  try{
+    const {xml}=decodeSaml($('samlIn').value);
+    $('samlOut').innerHTML=card('Decoded XML',
+      `<div style="padding:13px"><pre class="mono" style="margin:0;white-space:pre-wrap">${esc(xml.replace(/></g,'>\n<'))}</pre></div>`);
+  }catch(e){ $('samlOut').innerHTML=card('Could not decode',findRow('fail','Decoder',esc(e.message))); }
+});
+
+/* ================= JWT ================= */
+const GRAPH=['00000003-0000-0000-c000-000000000000','https://graph.microsoft.com'];
+function parseJwt(raw){
+  const t=raw.trim().replace(/^Bearer\s+/i,''), p=t.split('.');
+  if(p.length!==3) throw new Error('Expected three dot-separated segments. Got '+p.length+'.');
+  return {head:JSON.parse(dec.decode(b64bytes(p[0]))), body:JSON.parse(dec.decode(b64bytes(p[1]))), parts:p};
+}
+function inspectJwt(){
+  let j;
+  try{ j=parseJwt($('jwtIn').value); }
+  catch(e){ $('jwtOut').innerHTML=card('Could not decode',findRow('fail','Decoder',esc(e.message))); return; }
+  const {head,body}=j, now=Date.now(), states={};
+  let html='',rows='';
+  const alg=head.alg||'';
+  states.alg=alg==='none'?'fail':/^RS|^PS|^ES/.test(alg)?'pass':'warn';
+  rows+=findRow(states.alg,'Algorithm',`<code>${esc(alg||'missing')}</code>`,alg==='none'?'Unsigned. Discard it.':'');
+  if(head.kid) rows+=findRow('info','Key ID',`<code>${esc(head.kid)}</code>`,
+    'Must match a key currently published at Microsoft\'s JWKS endpoint. Keys rotate, so an SP caching them too long fails here.');
+  if(head.nonce) rows+=findRow('warn','Header nonce','present',
+    'A nonce in the header means this is an access token for Microsoft\'s own resources, not something a third party should validate.');
+  html+=card('Header',rows);
+
+  rows='';
+  const iss=body.iss||'', v2=/\/v2\.0/.test(iss)||body.ver==='2.0';
+  const tm=iss.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  states.iss=iss?'pass':'fail';
+  rows+=findRow(states.iss,'Issuer',`<code>${esc(iss||'missing')}</code>`,
+    `Endpoint version <b>${v2?'v2.0':'v1.0'}</b>. The SP's expected issuer has to match exactly, and the two versions differ.`);
+  if(tm) rows+=findRow('info','Tenant',`<code>${esc(tm[1])}</code>`);
+  const aud=Array.isArray(body.aud)?body.aud:[body.aud].filter(Boolean);
+  const isGraph=aud.some(a=>GRAPH.includes(a));
+  states.aud=aud.length?(isGraph?'fail':'info'):'fail';
+  rows+=findRow(states.aud,'Audience',aud.map(a=>`<code>${esc(a)}</code>`).join('<br>')||'missing',
+    isGraph?'This audience is Microsoft Graph. A Graph access token is not an identity token for a third party and will be rejected.'
+           :'For an id_token this should be the client ID. For an access token it is the resource being called.');
+  if(body.appid||body.azp) rows+=findRow('info','Client',`<code>${esc(body.appid||body.azp)}</code>`);
+  if(body.scp) rows+=findRow('info','Scopes',`<code>${esc(body.scp)}</code>`,'Delegated permissions, so this is on behalf of a signed-in user.');
+  if(body.roles) rows+=findRow('info','Roles',`<code>${esc([].concat(body.roles).join(', '))}</code>`);
+  html+=card('Audience and issuer',rows);
+
+  rows='';
+  const exp=body.exp?new Date(body.exp*1000):null, nbf=body.nbf?new Date(body.nbf*1000):null, iat=body.iat?new Date(body.iat*1000):null;
+  const [ls,lnote]=windowState(nbf,exp,now); states.time=ls;
+  if(iat) rows+=findRow('info','Issued at',`<code>${esc(iat.toISOString())}</code>`,`${ago(now-iat)} before your clock.`);
+  if(nbf) rows+=findRow('info','Not before',`<code>${esc(nbf.toISOString())}</code>`);
+  rows+=findRow(ls,'Expiry',exp?`<code>${esc(exp.toISOString())}</code>`:'no exp claim',`Against your browser clock, <b>${lnote}</b>.`);
+  html+=card('Lifetime',rows);
+
+  rows='';
+  if(body.oid) rows+=findRow('pass','oid',`<code>${esc(body.oid)}</code>`,
+    'The stable object ID in the tenant. This is the identifier to give an SP that needs to correlate with anything else in your stack.');
+  if(body.sub) rows+=findRow('warn','sub',`<code>${esc(body.sub)}</code>`,
+    'Pairwise per application. The same person gets a different <code>sub</code> in a different app registration, so it is wrong for cross-system matching.');
+  if(body.upn) rows+=findRow('info','upn',`<code>${esc(body.upn)}</code>`);
+  if(body.preferred_username) rows+=findRow('info','preferred_username',`<code>${esc(body.preferred_username)}</code>`);
+  states.subject=(body.oid||body.sub)?'pass':'fail';
+  rows+=findRow(body.email?'pass':'warn','email',body.email?`<code>${esc(body.email)}</code>`:'not present',
+    body.email?'':'Entra only emits <code>email</code> when the user object has a mail value and the claim is configured. SPs provisioning on email fail on exactly these users.');
+  if(body.name) rows+=findRow('info','name',`<code>${esc(body.name)}</code>`);
+  html+=card('Who this is',rows);
+
+  rows='';
+  if(body.hasgroups||body._claim_names){
+    states.groups='warn';
+    rows+=findRow('warn','Group overage','present',
+      'Entra dropped the group list because it exceeded the token size limit and sent a pointer instead. An SP reading only <code>groups</code> sees this user in none, which looks like a permissions bug. Limit the claim to app-assigned groups, or have the SP resolve groups via Graph.');
+  } else if(body.groups){
+    states.groups='pass';
+    const gr=[].concat(body.groups);
+    rows+=findRow('pass','groups',`${gr.length} value(s)<br><code>${esc(gr.slice(0,12).join(', '))}${gr.length>12?' …':''}</code>`,
+      /^[0-9a-f-]{36}$/i.test(gr[0]||'')?'Object IDs. If the SP expects display names, change the group claim source.':'');
+  } else { states.groups='na'; rows+=findRow('na','groups','no group claim','Fine unless the SP does authorisation by group.'); }
+  html+=card('Groups',rows);
+  html+=card('All claims',`<div style="padding:13px"><pre class="mono" style="margin:0;white-space:pre-wrap">${esc(JSON.stringify(body,null,2))}</pre></div>`);
+
+  const segs=[{tag:'alg',state:states.alg||'na'},{tag:'iss',state:states.iss||'na'},{tag:'aud',state:states.aud||'na'},
+    {tag:'exp',state:states.time||'na'},{tag:'sub',state:states.subject||'na'},{tag:'grp',state:states.groups||'na'}];
+  const worst=roll(segs.map(s=>s.state));
+  const label={fail:'A check failed. Start with the red segment.',warn:'Decoded with caveats. Read the flagged rows.',
+    pass:'Claims look coherent. Signature is a separate check.',info:'Decoded. Review below.',na:'Decoded.'}[worst];
+  $('jwtOut').innerHTML=strip(segs,label)+html; animateStrip();
+}
+async function verifyJwt(){
+  const btn=$('jwtVerify'); let j;
+  try{ j=parseJwt($('jwtIn').value); }
+  catch(e){ $('jwtOut').innerHTML=card('Could not decode',findRow('fail','Decoder',esc(e.message))); return; }
+  const tid=(String(j.body.iss||'').match(/([0-9a-f-]{36})/i)||[])[1]||'common';
+  const v2=/\/v2\.0/.test(j.body.iss||'');
+  const url=`https://login.microsoftonline.com/${tid}/discovery/${v2?'v2.0/':''}keys`;
+  btn.disabled=true; btn.textContent='Fetching keys…';
+  let res='';
+  try{
+    const keys=(await (await fetch(url)).json()).keys||[];
+    const k=keys.find(x=>x.kid===j.head.kid);
+    if(!k) res=findRow('fail','Key lookup',`kid <code>${esc(j.head.kid||'none')}</code> not published`,
+      'Microsoft has rotated past this key, or the token came from a different tenant than its issuer claims.');
+    else{
+      const key=await crypto.subtle.importKey('jwk',{kty:k.kty,n:k.n,e:k.e,alg:'RS256',ext:true},
+        {name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['verify']);
+      const ok=await crypto.subtle.verify('RSASSA-PKCS1-v1_5',key,b64bytes(j.parts[2]),
+        new TextEncoder().encode(j.parts[0]+'.'+j.parts[1]));
+      res=findRow(ok?'pass':'fail','Signature',ok?'valid':'does not verify',
+        ok?`Signed by key <code>${esc(k.kid)}</code> currently published for tenant <code>${esc(tid)}</code>. The body has not been altered.`
+          :'Does not match the published key. The token was modified or copied incompletely.');
+    }
+  }catch(e){
+    res=findRow('warn','Network',esc(e.message),`Could not reach <code>${esc(url)}</code>. Open it in a tab and compare the <code>kid</code> by hand.`);
+  }
+  btn.disabled=false; btn.textContent='Verify signature against Microsoft keys';
+  $('jwtOut').insertAdjacentHTML('afterbegin',card('Signature check',res));
+}
+$('jwtGo').addEventListener('click',inspectJwt);
+$('jwtVerify').addEventListener('click',verifyJwt);
+$('jwtClear').addEventListener('click',()=>{$('jwtIn').value='';$('jwtOut').innerHTML='';});
+
+/* ================= AADSTS ================= */
+const CODES={
+ '50011':['Reply URL mismatch','The redirect URI or ACS URL in the request is not registered on the app. Copy the value Entra reports back verbatim. Case and trailing slash matter.'],
+ '50105':['User not assigned to the application','Assignment is required and this user is not in an assigned group or role. Assign them or turn off the requirement.'],
+ '50020':['User from another identity provider','The account is not in the tenant you authenticated against. Check whether the SP points at /common instead of the tenant ID.'],
+ '50057':['Account disabled','The user object is disabled in the directory.'],
+ '90072':['External account needs inviting first','The user exists elsewhere but has not been invited into this tenant as a guest.'],
+ '700016':['Application not found in tenant','Wrong client ID, or a multi-tenant app never consented in this tenant.'],
+ '7000215':['Invalid client secret','Entra shows a secret value only once at creation, and people frequently save the secret ID instead.'],
+ '7000222':['Client secret expired','Generate a new secret and update the SP. Nothing about the integration changed, it ran out.'],
+ '65001':['Consent not granted','Grant admin consent on the app if user consent is restricted.'],
+ '500011':['Resource principal not found','The scope or resource identifier does not resolve to a service principal. Often a typo in an application ID URI.'],
+ '53003':['Blocked by Conditional Access','Policy blocked the sign-in. The integration is fine. Find the named policy in the sign-in log detail.'],
+ '50076':['Multi-factor authentication required','Expected for interactive users; a problem for a service or kiosk flow that cannot prompt.'],
+ '50058':['No signed-in session','A silent attempt found no session. Normal as a first step, only a fault if the interactive retry never happens.'],
+ '900023':['Invalid tenant identifier','The tenant name or ID in the authority URL does not resolve. Check for a typo or a stale vanity domain.'],
+ '75011':['Authentication method mismatch','Typically a requested SAML authentication context the IdP did not satisfy.'],
+ '51004':['Account not in the directory','In a synced environment, check that the object actually reached Entra.'],
+ '9002326':['Cross-origin token redemption not permitted','The redirect URI is registered under the Web platform but is being used by a single-page app. Move it to the SPA platform.']
+};
+$('errGo').addEventListener('click',()=>{
+  const m=String($('errIn').value).match(/(\d{4,7})/);
+  if(!m){ $('errOut').innerHTML=card('No code found',findRow('warn','Input','Paste something containing an AADSTS number.')); return; }
+  const n=m[1], hit=CODES[n];
+  let rows=findRow(hit?'info':'na','Code',`<code>AADSTS${esc(n)}</code>`,
+    hit?`<b>${esc(hit[0])}</b><br>${hit[1]}`:'Not in the short list here, which only covers the ones that recur in district integrations.');
+  rows+=findRow('info','Microsoft description',
+    `<a href="https://login.microsoftonline.com/error?code=${esc(n)}" target="_blank" rel="noopener">login.microsoftonline.com/error?code=${esc(n)}</a>`,
+    'Opens the current official description in a new tab, so it stays accurate as codes change.');
+  rows+=findRow('info','Next step','Sign-in logs, filtered to the app and timestamp',
+    'Read the failure reason and correlation ID. Send the SP the correlation ID and UTC timestamp when you escalate, not a screenshot of the browser error.');
+  $('errOut').innerHTML=card('Lookup',rows);
+});
+$('errIn').addEventListener('keydown',e=>{ if(e.key==='Enter') $('errGo').click(); });
+
+initAuth();
+</script>
+</body>
+</html>
