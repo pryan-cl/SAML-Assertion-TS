@@ -1084,9 +1084,18 @@ async function assignmentContext(spId, userQ){
   return ctx;
 }
 
-function analyseSignIns(items){
+function analyseSignIns(items, opts){
+  /* opts.filteredByUser lets the empty case name the likeliest cause instead of
+     shrugging at "the filter did not match". Deliberately a replacement clause
+     rather than an extra sentence: this note is read mid-call, and a paragraph
+     gets skipped. The Free-tenant line stays in both branches, since districts
+     on A1 are the audience it exists for. */
+  const byUser=!!(opts&&opts.filteredByUser);
   if(!items||!items.length) return {rows:findRow('na','Sign-in log','no matching entries',
-    'Either the sign-in has not happened in the retained window, or the filter did not match. Entra ID Free tenants cannot serve this API at all.'), st:{}};
+    (byUser
+      ? 'Either the sign-in has not happened in the retained window, or this user has not signed in to this app. Clear the <b>Affected user</b> field to see the whole application.'
+      : 'Either the sign-in has not happened in the retained window, or the filter did not match.')
+    +' Entra ID Free tenants cannot serve this API at all.'), st:{}};
   let worst='pass', unknown=0, wouldBlockCount=0;
   let t='<div style="overflow-x:auto"><table class="claims"><thead><tr><th>When (UTC)</th><th>Status</th><th>User</th><th>Detail</th><th>Correlation ID</th></tr></thead><tbody>';
   items.slice(0,15).forEach(s=>{
@@ -1214,7 +1223,7 @@ $('runChecks').addEventListener('click', async ()=>{
   if(sp){
     try{
       const l=await g(signInQuery(sp.appId, userQ));
-      parts.log=analyseSignIns(l.value);
+      parts.log=analyseSignIns(l.value, {filteredByUser:!!userQ});
     }catch(e){ errors+=findRow('warn','Sign-in log read',esc(e.message),graphHint(e)); }
   }
 
@@ -1236,7 +1245,7 @@ $('refreshLogs').addEventListener('click', async ()=>{
   const btn=$('refreshLogs'); btn.disabled=true; btn.textContent='Reading…';
   try{
     const l=await g(signInQuery(lastRun.sp.appId, lastRun.userQ));
-    lastRun.parts.log=analyseSignIns(l.value);
+    lastRun.parts.log=analyseSignIns(l.value, {filteredByUser:!!lastRun.userQ});
   }catch(e){
     lastRun.parts.log={rows:findRow('warn','Sign-in log read',esc(e.message),graphHint(e)), st:{}};
   }

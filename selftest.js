@@ -298,6 +298,31 @@ async function selfTest(){
   await t('an enforced failure outranks a report-only warning', ()=>eq(
     analyseSignIns([...ro('reportOnlyFailure'),{status:{errorCode:53003}}]).st.signin,'fail'));
 
+  /* The empty case names the likeliest cause when a user filter was applied.
+     Paste mode passes no options, so it keeps the general wording. */
+  await t('an empty log filtered by user says to clear the user field', ()=>{
+    const r=analyseSignIns([],{filteredByUser:true});
+    if(!/has not signed in to this app/.test(r.rows)) return 'did not name the likely cause';
+    return has(r.rows,/Clear the <b>Affected user<\/b> field/);
+  });
+  await t('an empty log with no user filter keeps the general wording', ()=>{
+    const r=analyseSignIns([]);
+    if(/Affected user/.test(r.rows)) return 'suggested clearing a filter that was never applied';
+    return has(r.rows,/the filter did not match/);
+  });
+  await t('both empty variants keep the Free tenant line', ()=>{
+    const a=analyseSignIns([],{filteredByUser:true}).rows, b=analyseSignIns([]).rows;
+    return /Free tenants cannot serve/.test(a)&&/Free tenants cannot serve/.test(b)
+      ? true : 'lost the line districts on A1 need';
+  });
+  await t('the empty note stays short enough to read mid-call', ()=>{
+    const text=analyseSignIns([],{filteredByUser:true}).rows.replace(/<[^>]+>/g,'');
+    const sentences=(text.match(/\.\s|\.$/g)||[]).length;
+    return sentences<=3 ? true : `grew to ${sentences} sentences, which gets skipped`;
+  });
+  await t('opts does not disturb a populated log', ()=>
+    eq(analyseSignIns([{status:{errorCode:0}}],{filteredByUser:true}).st.signin,'pass'));
+
   /* ---- identity masking ----
      Live tenant output names district staff and students and these sessions get
      screenshared, so it is masked by default. The domain survives because it is
