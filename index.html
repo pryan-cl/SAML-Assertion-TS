@@ -442,7 +442,7 @@ pre.snip b{color:var(--info);font-weight:400}
     <h2>Option A — pasted output, nothing to approve</h2>
     <p>The district administrator runs a read-only query in a tool Microsoft already owns, then pastes the result here. No app registration, no consent, no tokens in this page. This is the version to reach for on a support call today.</p>
     <p>Send them to Graph Explorer, have them sign in, consent to the individual permission it prompts for, run the query, and copy the response. Or in PowerShell:</p>
-    <pre class="snip">Connect-MgGraph -Scopes <b>"Application.Read.All","User.Read.All","AuditLog.Read.All"</b>
+    <pre class="snip">Connect-MgGraph -Scopes <b>"Application.Read.All","User.Read.All","Directory.Read.All","AuditLog.Read.All"</b>
 
 <b># App configuration, signing certs, entity IDs, reply URLs</b>
 Get-MgServicePrincipal -Filter "displayName eq 'APP-NAME'" |
@@ -457,14 +457,16 @@ Get-MgUser -UserId "jdoe@district.k12.st.us" -Property userPrincipalName,mail,
   onPremisesImmutableId,onPremisesSamAccountName | ConvertTo-Json
 
 <b># Is the user actually assigned to the app</b>
-Get-MgUserAppRoleAssignment -UserId "jdoe@district.k12.st.us" | ConvertTo-Json -Depth 3
+Get-MgUserAppRoleAssignment -UserId "jdoe@district.k12.st.us" <b>-ConsistencyLevel eventual -CountVariable c</b> |
+  ConvertTo-Json -Depth 3
 
 <b># Recent sign-ins for the app (needs Entra ID P1 or P2)</b>
 Get-MgAuditLogSignIn -Filter "appId eq 'APP-GUID'" -Top 15 | ConvertTo-Json -Depth 5</pre>
+    <p><code>Directory.Read.All</code> is in that list for the assignment query alone. Microsoft does not accept <code>User.Read.All</code> for <code>appRoleAssignments</code>, and the only lower-privileged alternative it does accept is <code>AppRoleAssignment.ReadWrite.All</code>, a write scope this page will not ask anyone to consent. Drop the assignment query and the first two scopes are enough.</p>
     <p>Graph Explorer equivalents, if they prefer clicking:</p>
     <pre class="snip">GET /v1.0/servicePrincipals?$filter=startswith(displayName,'APP-NAME')
 GET /v1.0/users/USER?$select=userPrincipalName,mail,proxyAddresses,accountEnabled,userType,onPremisesSyncEnabled,onPremisesImmutableId
-GET /v1.0/users/USER/appRoleAssignments
+GET /v1.0/users/USER/appRoleAssignments?$count=true     (with header ConsistencyLevel: eventual)
 GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
   </div>
 
@@ -800,9 +802,13 @@ async function token(){
   try{ return (await msalApp.acquireTokenSilent({scopes:SCOPES, account})).accessToken; }
   catch(e){ return (await msalApp.acquireTokenPopup({scopes:SCOPES})).accessToken; }
 }
-async function g(path){
+/* headers is optional. Some endpoints need ConsistencyLevel to return complete
+   results, and a partial result that looks whole is the failure mode this tool
+   exists to avoid. */
+async function g(path, headers){
   const t=await token();
-  const res=await fetch('https://graph.microsoft.com/v1.0'+path,{headers:{Authorization:'Bearer '+t}});
+  const res=await fetch('https://graph.microsoft.com/v1.0'+path,
+    {headers:Object.assign({Authorization:'Bearer '+t}, headers||{})});
   const body=await res.json().catch(()=>({}));
   if(!res.ok){
     const err=body.error||{};
@@ -945,13 +951,18 @@ function analyseAssignments(list, sp, ctx){
   if(!sp.appRoleAssignmentRequired) return {rows:findRow('na','Assignment check','not required',
     'The app allows any user in the tenant, so assignment is not the problem.'), st:{}};
 
-  /* A hit here is not proof of a direct assignment. Observed against a live
-     tenant: /users/{id}/appRoleAssignments returned a group's assignment, with
-     principalType 'Group' and principalId set to the group rather than the
-     user. Reporting that as "directly" names the wrong object and sends the
-     reader to the wrong blade, so classify the hit by principalType instead of
-     assuming. Treat an absent principalType as direct, which is how the older
-     shape and most hand-pasted output look. */
+  /* A hit here is not proof of a direct assignment. Microsoft documents that
+     this endpoint "also returns app role assignments granted to groups that the
+     user is a direct member of", and a live tenant confirmed it: the row came
+     back with principalType 'Group' and principalId set to the group. Reporting
+     that as "directly" names the wrong object and sends the reader to the wrong
+     blade, so classify the hit by principalType instead of assuming. Treat an
+     absent principalType as direct, which is how the older shape and most
+     hand-pasted output look.
+
+     Note the word direct in that quote. Nested membership, where the user is in
+     a group that is itself a member of the assigned group, is not covered here.
+     That is what assignmentContext() below is for. */
   const hit=(list||[]).find(a=> a.resourceId===sp.id || a.resourceDisplayName===sp.displayName);
   if(hit){
     const viaGroup = hit.principalType==='Group';
@@ -1134,7 +1145,12 @@ $('runChecks').addEventListener('click', async ()=>{
       const u=await g(`/users/${encodeURIComponent(userQ)}?$select=id,displayName,userPrincipalName,mail,proxyAddresses,accountEnabled,userType,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesSamAccountName`);
       parts.usr=analyseUser(u);
       try{
-        const a=await g(`/users/${encodeURIComponent(userQ)}/appRoleAssignments`);
+        /* ConsistencyLevel eventual with $count is what Microsoft documents as
+           the way to get complete results here. Without it, a user with many
+           indirect assignments can be handed a partial list with no indication
+           that anything was left out. */
+        const a=await g(`/users/${encodeURIComponent(userQ)}/appRoleAssignments?$count=true`,
+          {ConsistencyLevel:'eventual'});
         /* Only worth the extra reads when assignment can actually block sign-in. */
         let ctx=null;
         if(sp&&sp.id&&sp.appRoleAssignmentRequired){

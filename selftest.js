@@ -119,6 +119,44 @@ async function selfTest(){
   await t('only a complete check may cite AADSTS50105', ()=>not(asg([],{userId:'u1',groupIds:['g1'],assigned:new Set(['g9']),complete:false,truncated:true}).rows,/AADSTS50105/));
   await t('truncated paging degrades to warn, not fail',()=>eq(asg([],{userId:'u1',groupIds:['g1'],assigned:new Set(['g9']),complete:false,truncated:true}).st.assigned,'warn'));
 
+  /* ---- g() header plumbing ----
+     Some endpoints return complete results only when ConsistencyLevel is sent.
+     A partial result that looks whole is exactly the failure this tool exists
+     to avoid, so the header must survive the helper. */
+  const withFetch=async (handler, fn)=>{
+    const realFetch=window.fetch, realToken=window.token;
+    const calls=[];
+    try{
+      window.token=async()=>'fake-token';
+      window.fetch=async(u,opts)=>{ calls.push({url:u, headers:(opts||{}).headers||{}}); return handler(); };
+      const out=await fn();
+      return {out, calls};
+    } finally { window.fetch=realFetch; window.token=realToken; }
+  };
+  await t('g() passes custom headers through and keeps Authorization', async ()=>{
+    const {calls}=await withFetch(()=>({ok:true, json:async()=>({value:[]})}),
+      ()=>g('/x',{ConsistencyLevel:'eventual'}));
+    if(!calls.length) return 'fetch was never called';
+    const h=calls[0].headers;
+    if(h.Authorization!=='Bearer fake-token') return 'lost the Authorization header';
+    return eq(h.ConsistencyLevel,'eventual');
+  });
+  await t('g() still works when no headers are given', async ()=>{
+    const {calls}=await withFetch(()=>({ok:true, json:async()=>({value:[]})}), ()=>g('/x'));
+    return eq(calls[0].headers.Authorization,'Bearer fake-token');
+  });
+  await t('g() still raises Graph errors with status and code', async ()=>{
+    let threw=null;
+    try{
+      await withFetch(()=>({ok:false, status:403, statusText:'Forbidden',
+        json:async()=>({error:{code:'Authorization_RequestDenied', message:'Insufficient privileges'}})}),
+        ()=>g('/x',{ConsistencyLevel:'eventual'}));
+    }catch(e){ threw=e; }
+    if(!threw) return 'resolved on a 403';
+    return threw.status===403 && threw.code==='Authorization_RequestDenied'
+      ? true : `lost error detail: status=${threw.status} code=${threw.code}`;
+  });
+
   /* ---- assignmentContext against a stubbed Graph ----
      The paging, the nextLink rewrite, the page bound and the principal matching
      are pure logic and were previously untested, because reaching them needed a
