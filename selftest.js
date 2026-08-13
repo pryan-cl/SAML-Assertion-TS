@@ -415,6 +415,27 @@ async function selfTest(){
     return bad.length?`not read-only: ${bad.join(', ')}`:true;
   });
 
+  /* The Setup tab is what a district administrator reads before consenting, so
+     it has to describe what the code actually asks for. Documentation drifting
+     away from SCOPES is a promise quietly becoming untrue, and nothing else
+     would catch it. */
+  const permRows=()=>Array.from(document.querySelectorAll('#p-setup table.claims tbody tr'))
+    .map(tr=>Array.from(tr.children).map(td=>td.textContent.trim()));
+  await t('Setup carries exactly one permissions table', ()=>
+    eq(document.querySelectorAll('#p-setup table.claims').length,1));
+  await t('the Setup permissions table matches SCOPES', ()=>{
+    const rows=permRows();
+    if(rows.length<SCOPES.length) return `only ${rows.length} rows, so the table has moved or lost entries`;
+    const required=rows.filter(c=>c[1]==='required').map(c=>c[0]).sort().join(', ');
+    const scopes=SCOPES.slice().sort().join(', ');
+    return required===scopes ? true
+      : `the table says [${required}] but the code requests [${scopes}]`;
+  });
+  await t('anything the table calls optional is genuinely not requested', ()=>{
+    const lying=permRows().filter(c=>c[1]==='optional').map(c=>c[0]).filter(s=>SCOPES.includes(s));
+    return lying.length?`marked optional but requested anyway: ${lying.join(', ')}`:true;
+  });
+
   /* ---- item 8: supply chain ----
      Scoped to third-party origins. SRI and version pinning are about code
      arriving from someone else's server; a same-origin file such as this one

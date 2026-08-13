@@ -481,12 +481,28 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
   </div>
 
   <div class="card notes">
+    <h2>Permissions the live checks need</h2>
+    <p>The same set applies to <b>Option B</b> and <b>Option C</b> below, so it is listed once here rather than inside either of them. <b>Option A</b> needs none of it: the district runs the queries themselves in a tool Microsoft already owns, and consents only to what that tool asks for.</p>
+    <div style="overflow-x:auto"><table class="claims">
+      <thead><tr><th>Delegated scope</th><th>Status</th><th>Unlocks</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Application.Read.All</td><td class="short">required</td><td>SSO mode, entity IDs, reply URLs, signing certificates and expiry, assignment requirement</td><td>Admin consent. The workhorse.</td></tr>
+        <tr><td>User.Read.All</td><td class="short">required</td><td>UPN versus mail, account enabled, guest status, on-prem sync state</td><td>Admin consent.</td></tr>
+        <tr><td>Directory.Read.All</td><td class="short">required</td><td>App role assignments, plus the group memberships behind them</td><td>Admin consent. Broadest of the set. Dropping it disables group-inheritance resolution, so the assignment check falls back to reporting that it cannot tell for any user assigned through a group, which is the normal case in districts.</td></tr>
+        <tr><td>AuditLog.Read.All</td><td class="short">required</td><td>Sign-in logs with failure reason and correlation ID</td><td>Admin consent. Requires Entra ID P1 or P2, so districts on A1 will get a 403 here.</td></tr>
+        <tr><td>Policy.Read.All</td><td>optional</td><td>Conditional Access policies scoped to the app</td><td>Not requested by this page. Admin consent if you add it. Report-only policy outcomes already surface in the sign-in log without it.</td></tr>
+      </tbody>
+    </table></div>
+    <p>The four marked required are exactly what the page asks for. Adding a scope widens what a district administrator has to approve, so treat any addition as a real cost rather than a convenience.</p>
+  </div>
+
+  <div class="card notes">
     <h2>Option B — the district registers their own app</h2>
     <p>This is usually the easiest yes. The district creates a single-page app registration in their own tenant, pastes the client ID and their tenant ID into the fields on the Live tenant tab, and gets the full live checks without extending any trust to a vendor. Their app, their tenant, their consent, their revoke button. Nothing to security review on your side because you are not asking for anything.</p>
     <ol>
       <li>Entra admin center &rarr; App registrations &rarr; New registration. Any name. Accounts in this organizational directory only.</li>
       <li>Redirect URI: platform <b>Single-page application</b>, value is the exact URL of this page.</li>
-      <li>API permissions &rarr; Microsoft Graph &rarr; Delegated: the four scopes in the table below. Then <b>Grant admin consent</b>.</li>
+      <li>API permissions &rarr; Microsoft Graph &rarr; Delegated: the scopes marked <em>required</em> under <b>Permissions the live checks need</b> above. Then <b>Grant admin consent</b>.</li>
       <li>Copy the Application (client) ID and the Directory (tenant) ID from the Overview blade into the fields above.</li>
       <li>No client secret. This is a public client and does not need one.</li>
     </ol>
@@ -501,21 +517,10 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
       <li>Register the app in <b>your own</b> tenant. Supported account types: <em>Accounts in any organizational directory</em>.</li>
       <li>Add a <b>Single-page application</b> redirect URI with this page's exact URL. Registering it as <em>Web</em> instead is the single most common mistake and produces AADSTS9002326 about cross-origin token redemption.</li>
       <li>Complete <b>publisher verification</b> so the consent screen shows your company as verified, and set the privacy statement and terms URLs.</li>
-      <li>Add the delegated permissions below. Do not request <code>offline_access</code>. Without it there is no refresh token, so the session dies with the tab.</li>
+      <li>Add the delegated permissions marked <em>required</em> above. Do not request <code>offline_access</code>. Without it there is no refresh token, so the session dies with the tab.</li>
     </ol>
-    <h3>Permissions, and what each one buys</h3>
-    <div style="overflow-x:auto"><table class="claims">
-      <thead><tr><th>Delegated scope</th><th>Unlocks</th><th>Notes</th></tr></thead>
-      <tbody>
-        <tr><td>Application.Read.All</td><td>SSO mode, entity IDs, reply URLs, signing certificates and expiry, assignment requirement</td><td>Admin consent. The workhorse.</td></tr>
-        <tr><td>User.Read.All</td><td>UPN versus mail, account enabled, guest status, on-prem sync state</td><td>Admin consent.</td></tr>
-        <tr><td>Directory.Read.All</td><td>App role assignments and group resolution</td><td>Admin consent. Broadest of the set. Drop it if you can live without the assignment check.</td></tr>
-        <tr><td>AuditLog.Read.All</td><td>Sign-in logs with failure reason and correlation ID</td><td>Admin consent. Requires Entra ID P1 or P2, so districts on A1 will get a 403 here.</td></tr>
-        <tr><td>Policy.Read.All</td><td>Conditional Access policies scoped to the app</td><td>Admin consent. Optional.</td></tr>
-      </tbody>
-    </table></div>
     <h3>Admin consent</h3>
-    <p>Every scope above needs an administrator. Either the district admin ticks <em>Consent on behalf of your organization</em> at first sign-in, or you send a consent link ahead of the call:</p>
+    <p>Every required scope needs an administrator. Either the district admin ticks <em>Consent on behalf of your organization</em> at first sign-in, or you send a consent link ahead of the call:</p>
     <pre class="snip">https://login.microsoftonline.com/<b>{district-tenant-id}</b>/adminconsent?client_id=<b>{your-client-id}</b>&redirect_uri=<b>{this-page-url}</b></pre>
     <p>Either way, tell them plainly that consent is tenant-wide and persists until revoked, and show them where to revoke it: Entra admin center &rarr; Enterprise applications &rarr; your app &rarr; Permissions, or delete the service principal outright. Offering the revocation path unprompted is what makes the ask credible.</p>
     <h3>What this page does with the token</h3>
