@@ -299,6 +299,13 @@ pre.snip b{color:var(--info);font-weight:400}
   </header>
   <div class="content">
 
+<!-- Sits above the panels, not below them, and outside every section so it shows
+     on all six tabs. A warning you meet after scrolling past the paste box is a
+     warning you read after doing the thing it warns about. -->
+<div class="warnbox">
+  <b>Before you paste or pull a real one.</b> Assertions and tokens are live credentials, and directory output names real staff and students. Nothing here leaves your browser, but the value still sits in your clipboard, your scrollback, and any screenshot taken on a call. Use test accounts where you can, and treat captured production output as student data.
+</div>
+
 <!-- ============ LIVE TENANT ============ -->
 <section id="p-live" role="tabpanel" aria-labelledby="tab-live">
   <div class="io">
@@ -547,10 +554,6 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
     </ul>
   </div>
 </section>
-
-<div class="warnbox">
-  <b>Before you paste or pull a real one.</b> Assertions and tokens are live credentials, and directory output names real staff and students. Nothing here leaves your browser, but the value still sits in your clipboard, your scrollback, and any screenshot taken on a call. Use test accounts where you can, and treat captured production output as student data.
-</div>
 
 <p class="foot">
   Static page, no backend, no analytics, no storage. Outbound requests happen only when you sign in to a tenant or run the optional token signature check, and go to Microsoft endpoints.<br>
