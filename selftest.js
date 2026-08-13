@@ -298,6 +298,74 @@ async function selfTest(){
   await t('an enforced failure outranks a report-only warning', ()=>eq(
     analyseSignIns([...ro('reportOnlyFailure'),{status:{errorCode:53003}}]).st.signin,'fail'));
 
+  /* ---- identity masking ----
+     Live tenant output names district staff and students and these sessions get
+     screenshared, so it is masked by default. The domain survives because it is
+     diagnostic rather than personal. This is a screenshare aid, not a security
+     control: both forms are in the DOM and CSS picks one. */
+  await t('maskId keeps the first character and the domain', ()=>eq(maskId('jdoe@district.k12.st.us'),'j•••@district.k12.st.us'));
+  await t('maskId handles a value with no domain', ()=>eq(maskId('someuser'),'s•••'));
+  await t('maskId handles null and empty without throwing', ()=>eq(maskId(null)+maskId(''),''));
+  await t('pii emits both a masked and a full form', ()=>{
+    const h=pii('jdoe@district.k12.st.us');
+    if(!/<i>j•••@district\.k12\.st\.us<\/i>/.test(h)) return 'no masked form';
+    return has(h,/<b>jdoe@district\.k12\.st\.us<\/b>/);
+  });
+  await t('pii escapes a hostile identity in both forms', ()=>{
+    const evil='<img src=x>@e.com';
+    const h=pii(evil);
+    return h.includes(evil) ? 'inserted the hostile string verbatim' : has(h,/&lt;img/);
+  });
+  await t('masking is on by default', ()=>
+    document.body.classList.contains('revealed') ? 'page started revealed' : true);
+  await t('the user card masks UPN, mail and display name', ()=>{
+    const r=analyseUser({userPrincipalName:'jdoe@d.org',mail:'j.doe@d.org',displayName:'Jane Doe',
+      proxyAddresses:['smtp:alias@d.org']});
+    for(const [label,re] of [['UPN',/j•••@d\.org/],['mail',/j•••@d\.org/],
+                             ['display name',/J•••/],['proxy address',/s•••:?/]])
+      if(!re.test(r.rows)) return `${label} not masked`;
+    return has(r.rows,/class="pii"/);
+  });
+  await t('the sign-in table masks the UPN', ()=>
+    has(analyseSignIns([{status:{errorCode:0},userPrincipalName:'jdoe@d.org'}]).rows,/j•••@d\.org/));
+  await t('an empty UPN does not render a stray mask', ()=>
+    not(analyseSignIns([{status:{errorCode:0}}]).rows,/•••/));
+  await t('the reveal toggle flips the class and the label', ()=>{
+    const b=$('revealPii'), before=document.body.classList.contains('revealed');
+    try{
+      b.click();
+      if(!document.body.classList.contains('revealed')) return 'class not applied';
+      if(b.getAttribute('aria-pressed')!=='true') return 'aria-pressed not updated';
+      if(!/Hide/.test(b.textContent)) return `label still reads ${b.textContent}`;
+      b.click();
+      return document.body.classList.contains('revealed') ? 'did not toggle back' : eq(b.getAttribute('aria-pressed'),'false');
+    } finally { document.body.classList.toggle('revealed', before); }
+  });
+  /* The boundary is deliberate: you pasted these yourself and reading the claim
+     values is the entire point of those tabs. */
+  await t('the JWT tab is deliberately not masked', ()=>{
+    $('jwtIn').value=[btoa(JSON.stringify({alg:'RS256'})),
+      btoa(JSON.stringify({iss:'https://sts.windows.net/x/',upn:'jdoe@d.org',email:'jdoe@d.org'})),'s']
+      .map(x=>x.replace(/=+$/,'')).join('.');
+    inspectJwt();
+    const h=$('jwtOut').innerHTML;
+    $('jwtIn').value=''; $('jwtOut').innerHTML='';
+    return h.includes('jdoe@d.org') ? true : 'the OIDC tab masked a claim value, which defeats its purpose';
+  });
+
+  /* ---- Refresh sign-ins ---- */
+  await t('signInQuery pins the filter shape', ()=>{
+    const q=signInQuery('app-guid','jdoe@d.org');
+    if(!/^\/auditLogs\/signIns\?\$filter=/.test(q)) return q;
+    if(!/%24top=15|\$top=15/.test(q)) return `lost $top: ${q}`;
+    return has(q,/userPrincipalName%20eq/);
+  });
+  await t('signInQuery omits the user clause when no user is given', ()=>
+    not(signInQuery('app-guid',''),/userPrincipalName/));
+  await t('signInQuery escapes an apostrophe in the UPN', ()=>
+    has(signInQuery('app-guid',"o'brien@d.org"),/o''brien/));
+  await t('Refresh sign-ins starts disabled', ()=>eq($('refreshLogs').disabled,true));
+
   /* ---- item 4: a truncated paste must not abort the inspector ---- */
   const utc=s=>Array.from(s,c=>c.charCodeAt(0));
   await t('certValidity reads a well-formed UTCTime pair', ()=>{

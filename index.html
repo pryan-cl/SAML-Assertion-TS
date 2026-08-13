@@ -220,6 +220,17 @@ table.claims td.st-fail{color:#f87171;font-weight:500}
 table.claims td.st-pass{color:var(--pass);font-weight:500}
 .empty{padding:16px 15px;color:var(--faint);font-size:13.5px}
 
+/* Directory identities pulled from a tenant, masked by default because these
+   sessions get screenshared with districts. A CSS toggle rather than a re-render,
+   so it applies instantly to output already on screen. Both forms sit in the DOM,
+   so this guards against a shoulder and a screenshare, not against devtools. It
+   is not a security boundary and is not claimed to be one. */
+.pii i{font-style:normal}
+.pii b{display:none;font-weight:inherit}
+body.revealed .pii i{display:none}
+body.revealed .pii b{display:inline}
+#revealPii[aria-pressed="true"]{color:var(--warn);border-color:rgba(250,204,21,.45)}
+
 /* ---------- prose cards ---------- */
 .notes h3{font-family:var(--f-body);font-size:14px;font-weight:600;color:var(--text);margin:22px 15px 8px;letter-spacing:-.005em}
 .notes ul,.notes ol{margin:0;padding:0 15px 4px 34px;color:var(--dim)}
@@ -322,6 +333,8 @@ pre.snip b{color:var(--info);font-weight:400}
     </div>
     <div class="io-foot">
       <button class="act primary" id="runChecks" disabled>Run checks</button>
+      <button class="act" id="refreshLogs" disabled title="Re-read only the sign-in log">Refresh sign-ins</button>
+      <button class="act" id="revealPii" aria-pressed="false" title="Directory identities are masked by default because these sessions get screenshared">Reveal identities</button>
       <button class="act" id="pasteMode">Use pasted output instead</button>
     </div>
   </div>
@@ -601,6 +614,25 @@ const animateStrip = () =>
 const WORST = ['na','info','pass','warn','fail'];
 const roll = l => l.reduce((a,b)=> WORST.indexOf(b)>WORST.indexOf(a)?b:a,'na');
 
+/* Directory identities are masked by default, because these sessions are
+   routinely screenshared with the district whose staff and students they name.
+   The domain survives, since it is diagnostic and not personal: it tells you
+   which tenant and which vanity domain you are looking at.
+
+   Only Live tenant output is masked. The SAML and OIDC tabs are not, because
+   you pasted that yourself on purpose and reading NameID and upn claim by claim
+   is the whole point of those tabs. */
+function maskId(v){
+  const s=String(v==null?'':v);
+  if(!s) return s;
+  const at=s.indexOf('@');
+  if(at<1) return s[0]+'•••';
+  return s[0]+'•••'+s.slice(at);
+}
+/* Emits both forms; CSS decides which is visible, so the toggle needs no
+   re-render and works on output already on screen. */
+const pii = v => `<span class="pii"><i>${esc(maskId(v))}</i><b>${esc(v==null?'':v)}</b></span>`;
+
 /* The Microsoft.Graph PowerShell SDK serialises property names in PascalCase
    (DisplayName, AppId), while Graph's own JSON is camelCase. The Setup tab tells
    people to run ConvertTo-Json, so both shapes arrive in the paste box.
@@ -662,6 +694,13 @@ function spQuery(appQ, select){
   const filter = byId ? `appId eq '${appQ}'`
                       : `startswith(displayName,'${appQ.replace(/'/g,"''")}')`;
   return `/servicePrincipals?$filter=${encodeURIComponent(filter)}&$select=${select}${byId?'':'&$top=10'}`;
+}
+
+/* Shared by Run checks and Refresh sign-ins so the two cannot drift apart. */
+function signInQuery(appId, userQ){
+  let f=`appId eq '${appId}'`;
+  if(userQ) f+=` and userPrincipalName eq '${userQ.replace(/'/g,"''")}'`;
+  return `/auditLogs/signIns?$filter=${encodeURIComponent(f)}&$top=15`;
 }
 
 /* Certificate thumbprints arrive in three different shapes and have to be
@@ -795,6 +834,9 @@ $('signOut').addEventListener('click', async ()=>{
      of the tenant session and keep their own Clear buttons. */
   clearPasted();
   $('qApp').value=''; $('qUser').value='';
+  /* The cached run holds the app, the user and their rendered directory data,
+     so ending the session has to drop it too. */
+  lastRun=null; $('refreshLogs').disabled=true;
   $('geNote').textContent='Placeholders are filled from the two fields above.';
   try{ sessionStorage.clear(); if(msalApp) await msalApp.logoutPopup({account:a}); }catch(e){}
 });
@@ -910,7 +952,8 @@ function analyseServicePrincipal(sp){
 
 function analyseUser(u){
   const st={}; let rows='';
-  rows+=findRow('info','User',`<code>${esc(u.userPrincipalName||u.id||'—')}</code>`, esc(u.displayName||''));
+  rows+=findRow('info','User',`<code>${pii(u.userPrincipalName||u.id||'—')}</code>`,
+    u.displayName?pii(u.displayName):'');
   if(u.accountEnabled===false){
     st.user='fail';
     rows+=findRow('fail','Account enabled','no','Disabled account. Nothing downstream works. AADSTS50057.');
@@ -922,12 +965,12 @@ function analyseUser(u){
   const same = upn&&mail&&upn.toLowerCase()===mail.toLowerCase();
   st.nameid = mail?(same?'pass':'warn'):'fail';
   rows+=findRow(st.nameid,'UPN vs mail',
-    `<code>${esc(upn||'—')}</code><br><code>${esc(mail||'no mail value')}</code>`,
+    `<code>${pii(upn||'—')}</code><br><code>${mail?pii(mail):esc('no mail value')}</code>`,
     !mail ? 'This user has no mail attribute. Any claim sourced from <code>user.mail</code> comes out empty, and SPs that provision on email fail on exactly this user while working for everyone else.'
     : same ? 'Identical, so UPN-sourced and mail-sourced claims agree.'
     : 'These differ. If the SP matches on email but Entra sends UPN as the NameID, this user will not match their existing record. Check which one the SP has on file.');
   if(u.proxyAddresses&&u.proxyAddresses.length)
-    rows+=findRow('info','Proxy addresses',`<code>${u.proxyAddresses.slice(0,6).map(esc).join('<br>')}</code>`,
+    rows+=findRow('info','Proxy addresses',`<code>${u.proxyAddresses.slice(0,6).map(pii).join('<br>')}</code>`,
       'Aliases. If the SP has the user under one of these rather than the primary, matching fails.');
   if(u.onPremisesSyncEnabled)
     rows+=findRow('info','Directory source','synced from on-premises AD',
@@ -1073,7 +1116,7 @@ function analyseSignIns(items){
     if(wouldPrompt.length) detail+=`<br>report-only, would have interrupted: ${esc(wouldPrompt.join('; '))}`;
     t+=`<tr><td>${esc((s.createdDateTime||'').replace('T',' ').slice(0,19))}</td>`+
        `<td class="${code===null?'':ok?'st-pass':'st-fail'}">${code===null?'no status returned':ok?'success':'AADSTS'+code}</td>`+
-       `<td>${esc(s.userPrincipalName||'')}</td>`+
+       `<td>${s.userPrincipalName?pii(s.userPrincipalName):''}</td>`+
        `<td>${detail}</td>`+
        `<td>${esc(s.correlationId||'')}</td></tr>`;
   });
@@ -1170,16 +1213,44 @@ $('runChecks').addEventListener('click', async ()=>{
 
   if(sp){
     try{
-      let f=`appId eq '${sp.appId}'`;
-      if(userQ) f+=` and userPrincipalName eq '${userQ.replace(/'/g,"''")}'`;
-      const l=await g(`/auditLogs/signIns?$filter=${encodeURIComponent(f)}&$top=15`);
+      const l=await g(signInQuery(sp.appId, userQ));
       parts.log=analyseSignIns(l.value);
     }catch(e){ errors+=findRow('warn','Sign-in log read',esc(e.message),graphHint(e)); }
   }
 
   if(errors) parts.errors=errors;
+  /* Kept so Refresh sign-ins can re-read one endpoint and re-render, instead of
+     repeating the four to six calls a full run costs. */
+  lastRun = sp ? {parts, sp, userQ} : null;
+  $('refreshLogs').disabled = !lastRun;
   $('liveOut').innerHTML=renderLive(parts); animateStrip();
   btn.disabled=false; btn.textContent='Run checks';
+});
+
+/* Re-reads only the sign-in log. The rest of the verdict is whatever the last
+   full run established, which is still true: an assertion's audience does not
+   change because someone signed in again. */
+let lastRun=null;
+$('refreshLogs').addEventListener('click', async ()=>{
+  if(!lastRun) return;
+  const btn=$('refreshLogs'); btn.disabled=true; btn.textContent='Reading…';
+  try{
+    const l=await g(signInQuery(lastRun.sp.appId, lastRun.userQ));
+    lastRun.parts.log=analyseSignIns(l.value);
+  }catch(e){
+    lastRun.parts.log={rows:findRow('warn','Sign-in log read',esc(e.message),graphHint(e)), st:{}};
+  }
+  $('liveOut').innerHTML=renderLive(lastRun.parts); animateStrip();
+  btn.disabled=false; btn.textContent='Refresh sign-ins';
+});
+
+/* Masking is a screenshare aid, not a security control, so a CSS class is the
+   right mechanism: instant, and it applies to output already rendered. */
+$('revealPii').addEventListener('click',()=>{
+  const on=document.body.classList.toggle('revealed');
+  const b=$('revealPii');
+  b.setAttribute('aria-pressed', String(on));
+  b.textContent = on ? 'Hide identities' : 'Reveal identities';
 });
 
 /* ==================== paste mode ==================== */
