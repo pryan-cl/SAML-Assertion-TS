@@ -640,6 +640,29 @@ function maskId(v){
    re-render and works on output already on screen. */
 const pii = v => `<span class="pii"><i>${esc(maskId(v))}</i><b>${esc(v==null?'':v)}</b></span>`;
 
+/* Deep links into Microsoft's documentation rot, so they live here as one set
+   that can be re-checked together rather than scattered through the findings.
+   All verified 200 on 2026-08-14. The locale segment is deliberately omitted:
+   learn.microsoft.com redirects to the reader's own language, and a district
+   admin should not be forced into en-us.
+
+   Anything with an AADSTS number keeps linking to
+   login.microsoftonline.com/error?code=N instead. That is authoritative, stays
+   current on its own, and is the rule already recorded in CLAUDE.md. These are
+   only for checks where the fix is a procedure someone has to look up. */
+const DOCS={
+  cert:        'https://learn.microsoft.com/entra/identity/enterprise-apps/tutorial-manage-certificates-for-federated-single-sign-on',
+  claims:      'https://learn.microsoft.com/entra/identity-platform/saml-claims-customization',
+  encryption:  'https://learn.microsoft.com/entra/identity/enterprise-apps/howto-saml-token-encryption',
+  groups:      'https://learn.microsoft.com/entra/identity-platform/optional-claims',
+  redirect:    'https://learn.microsoft.com/entra/identity-platform/reply-url',
+  reportOnly:  'https://learn.microsoft.com/entra/identity/conditional-access/concept-conditional-access-report-only',
+  signInLogs:  'https://learn.microsoft.com/entra/identity/monitoring-health/concept-sign-ins',
+  idTokens:    'https://learn.microsoft.com/entra/identity-platform/id-tokens',
+  assign:      'https://learn.microsoft.com/entra/identity/enterprise-apps/assign-user-or-group-access-portal',
+};
+const msDoc=(k,label)=>`<a href="${DOCS[k]}" target="_blank" rel="noopener">${esc(label)}</a>`;
+
 /* The Microsoft.Graph PowerShell SDK serialises property names in PascalCase
    (DisplayName, AppId), while Graph's own JSON is camelCase. The Setup tab tells
    people to run ConvertTo-Json, so both shapes arrive in the paste box.
@@ -829,7 +852,7 @@ $('signIn').addEventListener('click', async ()=>{
   }catch(e){
     $('liveOut').innerHTML = card('Sign-in failed', findRow('fail','MSAL', esc(e.message),
       /9002326/.test(e.message)
-        ? 'The redirect URI is registered under the <b>Web</b> platform. Move it to <b>Single-page application</b> on the app registration.'
+        ? `The redirect URI is registered under the <b>Web</b> platform. Move it to <b>Single-page application</b> on the app registration. See ${msDoc('redirect','redirect URI restrictions')}.`
         : 'If this mentions consent, an administrator has to approve the permissions. The Setup tab has the admin consent URL.'));
   }
 });
@@ -905,10 +928,10 @@ function analyseServicePrincipal(sp){
   const notif=sp.notificationEmailAddresses||[];
   rows+=findRow(notif.length?'pass':'warn','Certificate notices',
     notif.length?notif.map(esc).join(', '):'nobody',
-    notif.length?'':'No notification address, so nobody in the district gets warned before the signing certificate expires. This is how integrations die quietly over a break.');
+    notif.length?'':`No notification address, so nobody in the district gets warned before the signing certificate expires. This is how integrations die quietly over a break. See ${msDoc('cert','managing SAML signing certificates')}.`);
   if(sp.tokenEncryptionKeyId)
     rows+=findRow('warn','Token encryption','enabled',
-      'Assertions are encrypted, so they cannot be read from a browser capture. Turn it off for the duration of a test, or work from the SP logs.');
+      `Assertions are encrypted, so they cannot be read from a browser capture. Turn it off for the duration of a test, or work from the SP logs. See ${msDoc('encryption','SAML token encryption')}.`);
 
   /* Token-encryption certificates also carry type AsymmetricX509Cert, so the
      old || listed them under signing certificates. Exclude Encrypt explicitly
@@ -1047,7 +1070,7 @@ function analyseAssignments(list, sp, ctx){
       (groups===0
         ? ' <b>No group memberships were visible for this user at all.</b> If they should be in one, the signed-in account may not be able to see it, and this conclusion is unsafe as it stands.'
         : '')+
-      ' Membership of groups configured as hidden is not returned to every caller, so confirm under <em>Users and groups</em> on the enterprise app before telling a district that their user is unassigned.'),
+      ` Membership of groups configured as hidden is not returned to every caller, so confirm under <em>Users and groups</em> on the enterprise app before telling a district that their user is unassigned. See ${msDoc('assign','assigning users and groups')}.`),
       st:{assigned:'fail'}};
   }
   return {rows:findRow('warn','Assigned to app','no direct assignment; group assignments not checked',
@@ -1102,7 +1125,7 @@ function analyseSignIns(items, opts){
     (byUser
       ? 'Either the sign-in has not happened in the retained window, or this user has not signed in to this app. Clear the <b>Affected user</b> field to see the whole application.'
       : 'Either the sign-in has not happened in the retained window, or the filter did not match.')
-    +' Entra ID Free tenants cannot serve this API at all.'), st:{}};
+    +` Entra ID Free tenants cannot serve the ${msDoc('signInLogs','sign-in logs API')} at all.`), st:{}};
   let worst='pass', unknown=0, wouldBlockCount=0;
   let t='<div style="overflow-x:auto"><table class="claims"><thead><tr><th>When (UTC)</th><th>Status</th><th>User</th><th>Detail</th><th>Correlation ID</th></tr></thead><tbody>';
   items.slice(0,15).forEach(s=>{
@@ -1139,7 +1162,7 @@ function analyseSignIns(items, opts){
   t+='</tbody></table></div>';
   if(wouldBlockCount) t+=findRow('warn','Report-only policy',
     `${wouldBlockCount} of the sign-ins above would have been blocked`,
-    'Those succeeded only because the policy is still in report-only mode. They stop working the day it is enforced, and nothing in the user-visible behaviour changes until then. This is the earliest warning available, so raise it before the rollout rather than after. Find the named policy under Conditional Access.');
+    `Those succeeded only because the policy is still in report-only mode. They stop working the day it is enforced, and nothing in the user-visible behaviour changes until then. This is the earliest warning available, so raise it before the rollout rather than after. Find the named policy under ${msDoc('reportOnly','Conditional Access report-only mode')}.`);
   if(unknown) t+=findRow('warn','Incomplete entries',`${unknown} row(s) carry no status`,
     'Those rows are not successes, they are unreadable. A <code>$select</code> that omits <code>status</code>, or a hand-trimmed paste, produces this. Re-read them with the full object before drawing any conclusion.');
   t+=findRow(worst,'Escalation','Send the SP the correlation ID plus the UTC timestamp',
@@ -1476,7 +1499,7 @@ async function inspectSaml(){
     rows+=findRow(nid?'info':'fail','NameID',nid?`<code>${esc(txt(nid))}</code>`:'missing');
     rows+=findRow(fmt?'info':'warn','NameID format',`<code>${esc(fmt.split(':').pop()||'not set')}</code>`,
       /emailAddress/.test(fmt)?'Email format.'
-        :'Entra defaults to unspecified with <code>user.userprincipalname</code>. SPs expecting an email address need the format changed to <code>emailAddress</code> and often the source changed to <code>user.mail</code>.');
+        :`Entra defaults to unspecified with <code>user.userprincipalname</code>. SPs expecting an email address need the format changed to <code>emailAddress</code> and often the source changed to <code>user.mail</code>. See ${msDoc('claims','customising SAML claims')}.`);
     html+=card('Identity',rows);
 
     rows='';
@@ -1538,7 +1561,7 @@ async function inspectSaml(){
         const d=daysLeft(val.to), st=d<0?'fail':d<30?'warn':'pass';
         rows+=findRow(st,'Cert validity',
           `<code>${esc(val.from.toISOString().slice(0,10))} &rarr; ${esc(val.to.toISOString().slice(0,10))}</code>`,
-          d<0?'Expired. Roll it in Entra and give the SP the new one.'
+          d<0?`Expired. Roll it in Entra and give the SP the new one. See ${msDoc('cert','rolling the certificate')}.`
             :d<30?`Expires in ${Math.round(d)} days. Schedule the rollover now, not on the day.`
             :`${Math.round(d)} days remaining.`);
       }
@@ -1559,7 +1582,7 @@ async function inspectSaml(){
       t+='</tbody></table></div>';
       const bare=attrs.filter(a=>!(a.getAttribute('Name')||'').includes('/')).length;
       t+=findRow(bare?'pass':'info','Naming',bare?`${bare} claim(s) use short names`:'all claims use schema URIs',
-        bare?'':'If the SP expects short names like <code>email</code>, edit them under <em>Attributes &amp; Claims</em> and clear the namespace field.');
+        bare?'':`If the SP expects short names like <code>email</code>, edit them under <em>Attributes &amp; Claims</em> and clear the namespace field. See ${msDoc('claims','customising SAML claims')}.`);
     }
     html+=card(`Claims (${attrs.length})`, t||'<p class="empty">No attribute statements.</p>');
   }
@@ -1657,7 +1680,7 @@ function inspectJwt(){
   if(body.oid) rows+=findRow('pass','oid',`<code>${esc(body.oid)}</code>`,
     'The stable object ID in the tenant. This is the identifier to give an SP that needs to correlate with anything else in your stack.');
   if(body.sub) rows+=findRow('warn','sub',`<code>${esc(body.sub)}</code>`,
-    'Pairwise per application. The same person gets a different <code>sub</code> in a different app registration, so it is wrong for cross-system matching.');
+    `Pairwise per application. The same person gets a different <code>sub</code> in a different app registration, so it is wrong for cross-system matching. See the ${msDoc('idTokens','id_token claims reference')}.`);
   if(body.upn) rows+=findRow('info','upn',`<code>${esc(body.upn)}</code>`);
   if(body.preferred_username) rows+=findRow('info','preferred_username',`<code>${esc(body.preferred_username)}</code>`);
   states.subject=(body.oid||body.sub)?'pass':'fail';
@@ -1670,7 +1693,7 @@ function inspectJwt(){
   if(body.hasgroups||body._claim_names){
     states.groups='warn';
     rows+=findRow('warn','Group overage','present',
-      'Entra dropped the group list because it exceeded the token size limit and sent a pointer instead. An SP reading only <code>groups</code> sees this user in none, which looks like a permissions bug. Limit the claim to app-assigned groups, or have the SP resolve groups via Graph.');
+      `Entra dropped the group list because it exceeded the token size limit and sent a pointer instead. An SP reading only <code>groups</code> sees this user in none, which looks like a permissions bug. Limit the claim to app-assigned groups, or have the SP resolve groups via Graph. See ${msDoc('groups','configuring group claims')}.`);
   } else if(body.groups){
     states.groups='pass';
     const gr=[].concat(body.groups);

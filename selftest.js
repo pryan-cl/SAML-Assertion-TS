@@ -608,6 +608,43 @@ async function selfTest(){
     return lying.length?`marked optional but requested anyway: ${lying.join(', ')}`:true;
   });
 
+  /* ---- Microsoft documentation links ----
+     Deep links rot. These cannot be fetched from here, since connect-src does
+     not allow learn.microsoft.com and a live check would fail offline anyway.
+     What can be pinned is the shape: https, the right host, no hardcoded
+     locale, and no dead or duplicated entries. Re-check them by hand when
+     something looks stale; the map exists so that is one job, not ten. */
+  await t('every documentation link is https and on learn.microsoft.com', ()=>{
+    const bad=Object.entries(DOCS).filter(([,u])=>!/^https:\/\/learn\.microsoft\.com\//.test(u));
+    return bad.length?`off-host or insecure: ${bad.map(([k])=>k).join(', ')}`:true;
+  });
+  await t('no documentation link hardcodes a locale', ()=>{
+    const bad=Object.entries(DOCS).filter(([,u])=>/\/[a-z]{2}-[a-z]{2}\//.test(u));
+    return bad.length?`forces a locale on the reader: ${bad.map(([k])=>k).join(', ')}`:true;
+  });
+  await t('no two documentation keys point at the same page', ()=>{
+    const seen={}, dupes=[];
+    Object.entries(DOCS).forEach(([k,u])=>{ if(seen[u]) dupes.push(`${seen[u]} and ${k}`); else seen[u]=k; });
+    return dupes.length?`duplicate targets: ${dupes.join('; ')}`:true;
+  });
+  await t('every documentation entry is actually used', ()=>{
+    const src=Array.from(document.querySelectorAll('script')).map(s=>s.textContent).join('\n');
+    const unused=Object.keys(DOCS).filter(k=>!new RegExp(`msDoc\\('${k}'`).test(src));
+    return unused.length?`dead entries: ${unused.join(', ')}`:true;
+  });
+  await t('doc() escapes its label', ()=>not(msDoc('cert','<img src=x>'),/<img/));
+  await t('doc() opens in a new tab without leaking the opener', ()=>{
+    const h=msDoc('cert','x');
+    return /target="_blank"/.test(h)&&/rel="noopener"/.test(h) ? true : h;
+  });
+  /* AADSTS keeps its live lookup. A curated mirror of Microsoft's error
+     catalogue is the one thing CLAUDE.md says not to build. */
+  await t('AADSTS still links to the live Microsoft lookup', ()=>{
+    $('errIn').value='50105'; $('errGo').click();
+    const h=$('errOut').innerHTML; $('errIn').value=''; $('errOut').innerHTML='';
+    return has(h,/login\.microsoftonline\.com\/error\?code=50105/);
+  });
+
   /* ---- item 8: supply chain ----
      Scoped to third-party origins. SRI and version pinning are about code
      arriving from someone else's server; a same-origin file such as this one
