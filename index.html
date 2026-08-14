@@ -424,28 +424,30 @@ pre.snip b{color:var(--info);font-weight:400}
     <h3>SAML</h3>
     <ul>
       <li><b>Audience mismatch.</b> The <code>&lt;Audience&gt;</code> must match the SP's entity ID character for character. Trailing slashes and http vs https are the usual culprits.</li>
-      <li><b>Signing certificate rolled.</b> The SP is usually pinned to a thumbprint. Compare it against the tenant's active signing key. Entra's expiry notice goes to the app's notification address, which is often a person who has left.</li>
+      <li><b>Signing certificate rolled.</b> The SP is usually pinned to a thumbprint. Compare it against the tenant's active signing key. Entra's expiry notice goes to the app's notification address, which is often a person who has left. See <a data-doc="cert">managing signing certificates</a>.</li>
       <li><b>Response not signed.</b> Entra signs the assertion only by default. SPs requiring a signed response need <em>Signing Option &rarr; Sign SAML response and assertion</em>.</li>
-      <li><b>NameID is the wrong thing.</b> Default source is <code>user.userprincipalname</code>. SPs keying on email need format <code>emailAddress</code> and usually source <code>user.mail</code>. UPN and mail differ more often than people expect in districts.</li>
-      <li><b>Claim names don't match.</b> Entra emits schema URIs; many SPs want short names. Clear the namespace field to get a bare name.</li>
-      <li><b>User not assigned.</b> Assignment required plus a user outside the assigned groups is AADSTS50105, before any assertion exists.</li>
+      <li><b>NameID is the wrong thing.</b> Default source is <code>user.userprincipalname</code>. SPs keying on email need format <code>emailAddress</code> and usually source <code>user.mail</code>. UPN and mail differ more often than people expect in districts. See <a data-doc="claims">customising claims</a>.</li>
+      <li><b>Claim names don't match.</b> Entra emits schema URIs; many SPs want short names. Clear the namespace field to get a bare name. See <a data-doc="claims">customising claims</a>.</li>
+      <li><b>User not assigned.</b> Assignment required plus a user outside the assigned groups is AADSTS50105, before any assertion exists. Do not trust a per-user view to tell you: someone assigned through a group, especially a nested one, can look unassigned there. Read the app's <em>Users and groups</em> list rather than the user's. See <a data-doc="assign">assigning users and groups</a>.</li>
       <li><b>Clock skew.</b> A drifted SP server rejects a good assertion as expired.</li>
-      <li><b>Reply URL mismatch.</b> AADSTS50011.</li>
+      <li><b>Reply URL mismatch.</b> AADSTS50011. The assertion's <code>Destination</code> has to be one of the app's registered reply URLs, character for character. See <a data-doc="redirect">redirect URI restrictions</a>.</li>
     </ul>
     <h3>OIDC / OAuth</h3>
     <ul>
       <li><b>v1 versus v2 endpoint.</b> The issuer differs and so do the claims. An SP validating a v1 issuer against a v2 token fails on <code>iss</code>.</li>
       <li><b>Wrong token handed over.</b> A Graph access token is not an id_token for the SP. Check <code>aud</code>.</li>
-      <li><b>sub is per-application.</b> Use <code>oid</code> for anything that has to correlate across systems.</li>
+      <li><b>sub is per-application.</b> Use <code>oid</code> for anything that has to correlate across systems. See the <a data-doc="idTokens">id_token claims reference</a>.</li>
       <li><b>email claim missing.</b> Not emitted unless the user object has a mail value and the claim is configured.</li>
-      <li><b>Group overage.</b> Past the token size limit Entra sends <code>hasgroups</code> instead of the list, and SPs reading only <code>groups</code> see the user in none.</li>
+      <li><b>Group overage.</b> Past the token size limit Entra sends <code>hasgroups</code> instead of the list, and SPs reading only <code>groups</code> see the user in none. See <a data-doc="groups">configuring group claims</a>.</li>
       <li><b>Expired secret.</b> Looks like a total outage with no user-side symptom. AADSTS7000215 / 7000222.</li>
       <li><b>Conditional Access.</b> AADSTS53003 means policy blocked it, not that the integration broke.</li>
+      <li><b>Conditional Access in report-only mode.</b> The only failure here you can see coming. The sign-in succeeds today and stops working the day the policy is enforced, with nothing visible changing in between. The sign-in log names the policy under its report-only result, so raise it before the rollout rather than after. See <a data-doc="reportOnly">report-only mode</a>.</li>
     </ul>
     <h3>Getting the raw material</h3>
     <ul>
       <li><b>Browser.</b> DevTools &rarr; Network, preserve log, reproduce the sign-in, find the POST to the ACS URL, copy <code>SAMLResponse</code> from the form data.</li>
-      <li><b>Entra sign-in logs.</b> Filter to the application, open the failed row, read the failure reason and correlation ID. Escalate with the correlation ID and UTC timestamp, not a screenshot.</li>
+      <li><b>Token encryption defeats that capture.</b> If the app has token encryption enabled the POST carries an <code>EncryptedAssertion</code>, and no amount of decoding reads it without the SP's private key. Nothing is wrong with your capture. Turn encryption off for the duration of a test, or work from the SP's own logs. See <a data-doc="encryption">SAML token encryption</a>.</li>
+      <li><b>Entra sign-in logs.</b> Filter to the application, open the failed row, read the failure reason and correlation ID. Escalate with the correlation ID and UTC timestamp, not a screenshot. See <a data-doc="signInLogs">sign-in logs</a>.</li>
       <li><b>Test in isolation.</b> The enterprise app's Single sign-on blade has a Test button that reports the AADSTS code without involving the SP at all.</li>
     </ul>
   </div>
@@ -662,6 +664,17 @@ const DOCS={
   assign:      'https://learn.microsoft.com/entra/identity/enterprise-apps/assign-user-or-group-access-portal',
 };
 const msDoc=(k,label)=>`<a href="${DOCS[k]}" target="_blank" rel="noopener">${esc(label)}</a>`;
+
+/* Field notes are static markup, so their links carry a key rather than a URL
+   and are resolved from the same map here. One place to audit, and a key that
+   stops existing leaves a plain span rather than a link to nowhere. */
+function wireDocLinks(){
+  document.querySelectorAll('a[data-doc]').forEach(a=>{
+    const u=DOCS[a.dataset.doc];
+    if(!u){ a.removeAttribute('href'); a.removeAttribute('target'); return; }
+    a.href=u; a.target='_blank'; a.rel='noopener';
+  });
+}
 
 /* The Microsoft.Graph PowerShell SDK serialises property names in PascalCase
    (DisplayName, AppId), while Graph's own JSON is camelCase. The Setup tab tells
@@ -1789,6 +1802,7 @@ $('errGo').addEventListener('click',()=>{
 });
 $('errIn').addEventListener('keydown',e=>{ if(e.key==='Enter') $('errGo').click(); });
 
+wireDocLinks();
 initAuth();
 
 /* ==================== self test ====================

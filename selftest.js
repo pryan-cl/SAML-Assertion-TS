@@ -627,11 +627,50 @@ async function selfTest(){
     Object.entries(DOCS).forEach(([k,u])=>{ if(seen[u]) dupes.push(`${seen[u]} and ${k}`); else seen[u]=k; });
     return dupes.length?`duplicate targets: ${dupes.join('; ')}`:true;
   });
+  /* Two call styles now: msDoc() from the findings, data-doc from the static
+     Field notes markup. An entry used by neither is dead. */
   await t('every documentation entry is actually used', ()=>{
     const src=Array.from(document.querySelectorAll('script')).map(s=>s.textContent).join('\n');
-    const unused=Object.keys(DOCS).filter(k=>!new RegExp(`msDoc\\('${k}'`).test(src));
+    const keyed=new Set(Array.from(document.querySelectorAll('a[data-doc]'),a=>a.dataset.doc));
+    const unused=Object.keys(DOCS).filter(k=>!new RegExp(`msDoc\\('${k}'`).test(src)&&!keyed.has(k));
     return unused.length?`dead entries: ${unused.join(', ')}`:true;
   });
+
+  /* ---- Field notes ---- */
+  await t('every data-doc key resolves to a real entry', ()=>{
+    const bad=Array.from(document.querySelectorAll('a[data-doc]'))
+      .filter(a=>!DOCS[a.dataset.doc]).map(a=>a.dataset.doc);
+    return bad.length?`unknown keys: ${bad.join(', ')}`:true;
+  });
+  await t('Field notes links are wired to real hrefs', ()=>{
+    const links=Array.from(document.querySelectorAll('#p-notes a[data-doc]'));
+    if(links.length<7) return `only ${links.length} linked items, expected the set to be wired`;
+    const bad=links.filter(a=>a.getAttribute('href')!==DOCS[a.dataset.doc]);
+    return bad.length?`${bad.length} link(s) not resolved from DOCS`:true;
+  });
+  await t('Field notes links open in a new tab without leaking the opener', ()=>{
+    const bad=Array.from(document.querySelectorAll('#p-notes a[data-doc]'))
+      .filter(a=>a.target!=='_blank'||!/noopener/.test(a.rel));
+    return bad.length?`${bad.length} link(s) missing target or rel`:true;
+  });
+  await t('an unknown key degrades to plain text, not a dead link', ()=>{
+    const a=document.createElement('a');
+    a.dataset.doc='__nope'; a.textContent='x'; a.href='https://example.com';
+    document.body.appendChild(a);
+    wireDocLinks();
+    const left=a.hasAttribute('href');
+    a.remove();
+    return left?'left an href pointing somewhere it should not':true;
+  });
+  /* The two gaps this tab had: the engine flagged them, the notes did not. */
+  await t('Field notes cover token encryption', ()=>
+    has($('p-notes').innerText,/token encryption/i));
+  await t('Field notes explain why an encrypted capture is unreadable', ()=>
+    has($('p-notes').innerText,/private key/i));
+  await t('Field notes cover report-only Conditional Access', ()=>
+    has($('p-notes').innerText,/report-only/i));
+  await t('the assignment note warns against trusting a per-user view', ()=>
+    has($('p-notes').innerText,/per-user view/i));
   await t('doc() escapes its label', ()=>not(msDoc('cert','<img src=x>'),/<img/));
   await t('doc() opens in a new tab without leaking the opener', ()=>{
     const h=msDoc('cert','x');
