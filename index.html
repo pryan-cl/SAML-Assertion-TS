@@ -1765,11 +1765,21 @@ const CODES={
  '9002326':['Cross-origin token redemption not permitted','The redirect URI is registered under the Web platform but is being used by a single-page app. Move it to the SPA platform.']
 };
 $('errGo').addEventListener('click',()=>{
-  const m=String($('errIn').value).match(/(\d{4,7})/);
+  const raw=String($('errIn').value);
+  /* Prefer a number that actually follows AADSTS. The hint above invites
+     pasting a whole error block, and those routinely carry a timestamp or a
+     correlation ID ahead of the code, so taking the first digit run looked up
+     the year and then linked to it with complete confidence. */
+  const tagged=raw.match(/AADSTS\s*(\d{4,7})/i);
+  const m=tagged||raw.match(/(\d{4,7})/);
   if(!m){ $('errOut').innerHTML=card('No code found',findRow('warn','Input','Paste something containing an AADSTS number.')); return; }
   const n=m[1], hit=CODES[n];
+  /* A bare number in a block that also mentions AADSTS elsewhere is a guess
+     worth admitting to, rather than presenting as the code. */
+  const guessed=!tagged&&/\d{4,7}[\s\S]*\d{4,7}/.test(raw);
   let rows=findRow(hit?'info':'na','Code',`<code>AADSTS${esc(n)}</code>`,
-    hit?`<b>${esc(hit[0])}</b><br>${hit[1]}`:'Not in the short list here, which only covers the ones that recur in district integrations.');
+    (guessed?'<b>No <code>AADSTS</code> prefix in what you pasted</b>, so this is the first number found and may not be the code. Paste the value with its prefix to be certain.<br>':'')+
+    (hit?`<b>${esc(hit[0])}</b><br>${hit[1]}`:'Not in the short list here, which only covers the ones that recur in district integrations.'));
   rows+=findRow('info','Microsoft description',
     `<a href="https://login.microsoftonline.com/error?code=${esc(n)}" target="_blank" rel="noopener">login.microsoftonline.com/error?code=${esc(n)}</a>`,
     'Opens the current official description in a new tab, so it stays accurate as codes change.');

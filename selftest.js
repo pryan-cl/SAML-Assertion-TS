@@ -645,6 +645,51 @@ async function selfTest(){
     return has(h,/login\.microsoftonline\.com\/error\?code=50105/);
   });
 
+  /* ---- AADSTS lookup ----
+     The hint invites pasting a whole error block, and those carry timestamps
+     and correlation IDs. Taking the first digit run meant a paste beginning
+     with a date looked up the year and linked to it confidently, which is the
+     failure this tool exists to remove, not to commit. */
+  const aadsts=v=>{ $('errIn').value=v; $('errOut').innerHTML=''; $('errGo').click();
+    const h=$('errOut').innerHTML; $('errIn').value=''; $('errOut').innerHTML=''; return h; };
+  const picked=v=>((aadsts(v).match(/error\?code=(\d+)/)||[,null])[1]);
+
+  await t('a bare code is looked up',            ()=>eq(picked('50105'),'50105'));
+  await t('a prefixed code is looked up',        ()=>eq(picked('AADSTS50105'),'50105'));
+  await t('a lowercase prefix still matches',    ()=>eq(picked('aadsts50105'),'50105'));
+  await t('a full error message is looked up',   ()=>eq(picked('AADSTS50105: The signed in user is not assigned to a role.'),'50105'));
+  await t('a timestamp before the code does not win', ()=>
+    eq(picked('Timestamp: 2026-08-14 12:00:00Z AADSTS50105: not assigned'),'50105'));
+  await t('a correlation id before the code does not win', ()=>
+    eq(picked('Correlation ID: 1234abcd AADSTS50011'),'50011'));
+  await t('a trailing timestamp does not win either', ()=>
+    eq(picked('AADSTS50105 ... Timestamp: 2026-08-14'),'50105'));
+  await t('a bare number with no prefix still resolves', ()=>eq(picked('99999'),'99999'));
+  await t('an ambiguous bare paste admits it is guessing', ()=>
+    has(aadsts('1234 and 5678'),/may not be the code/));
+  await t('an unambiguous paste does not hedge', ()=>
+    not(aadsts('AADSTS50105'),/may not be the code/));
+  await t('too few digits finds nothing',        ()=>eq(picked('123'),null));
+  await t('text with no digits finds nothing',   ()=>has(aadsts('hello'),/No code found/));
+  await t('an unknown code still links out',     ()=>{
+    const h=aadsts('99999');
+    if(!/Not in the short list/.test(h)) return 'did not admit the code is unlisted';
+    return has(h,/error\?code=99999/);
+  });
+  await t('every curated code renders its own title and link', ()=>{
+    const bad=Object.keys(CODES).filter(c=>{
+      const h=aadsts(c);
+      return !h.includes(CODES[c][0]) || !new RegExp(`error\\?code=${c}`).test(h);
+    });
+    return bad.length?`broken entries: ${bad.join(', ')}`:true;
+  });
+  await t('Enter in the code box runs the lookup', ()=>{
+    $('errIn').value='50105'; $('errOut').innerHTML='';
+    $('errIn').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+    const h=$('errOut').innerHTML; $('errIn').value=''; $('errOut').innerHTML='';
+    return has(h,/error\?code=50105/);
+  });
+
   /* ---- item 8: supply chain ----
      Scoped to third-party origins. SRI and version pinning are about code
      arriving from someone else's server; a same-origin file such as this one
