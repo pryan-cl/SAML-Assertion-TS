@@ -441,6 +441,45 @@ async function selfTest(){
   await t('parseJwt rejects a two-segment token', ()=>{ try{ parseJwt('a.b'); return 'accepted it'; }catch(e){ return has(e.message,/three/); } });
   await t('parseJwt reads the body',              ()=>eq(parseJwt(mkJwt({alg:'RS256'},{oid:'x'})).body.oid,'x'));
   await t('parseJwt tolerates a Bearer prefix',   ()=>eq(parseJwt('Bearer '+mkJwt({alg:'RS256'},{oid:'y'})).body.oid,'y'));
+
+  /* Anything with two dots gets past the segment count, so the messages beyond
+     it are what a mis-paste actually meets. They used to be raw atob and
+     JSON.parse output, unreadable and naming nothing. */
+  const why=v=>{ try{ parseJwt(v); return null; }catch(e){ return e.message; } };
+  await t('a three-part non-token names the segment and mentions JWT', ()=>{
+    const m=why('not.a.token');
+    if(!m) return 'accepted a non-token';
+    if(/is not valid JSON|Unexpected token/.test(m)) return `raw parser message leaked: ${m}`;
+    if(!/header|payload/.test(m)) return `does not name the segment: ${m}`;
+    return has(m,/JWT/);
+  });
+  await t('valid base64 that is not JSON is explained', ()=>{
+    const m=why(btoa('hello')+'.'+btoa('world')+'.sig');
+    return /not JSON/.test(m||'') ? true : `unclear message: ${m}`;
+  });
+  /* Header first, then payload, so an empty payload needs a valid header ahead
+     of it to be reached at all. 'e30' is base64 for {}. */
+  await t('an empty segment is called out as empty', ()=>{
+    const m=why('e30..sig');
+    if(!/empty/.test(m||'')) return `unclear message: ${m}`;
+    return has(m,/payload/);
+  });
+  await t('a bad header is reported before the payload is looked at', ()=>
+    has(why('!!!.e30.sig')||'', /header/));
+  await t('no decoder message contains a replacement character', ()=>{
+    const bad=['not.a.token','a..c',btoa('x')+'.'+btoa('y')+'.z','!!!.!!!.!!!']
+      .map(why).filter(Boolean).filter(m=>/�/.test(m));
+    return bad.length ? `mojibake in: ${bad[0]}` : true;
+  });
+  await t('the decoder error reaches the panel, not the console', ()=>{
+    $('jwtIn').value='not.a.token'; $('jwtOut').innerHTML='';
+    inspectJwt();
+    const h=$('jwtOut').innerHTML;
+    $('jwtIn').value=''; $('jwtOut').innerHTML='';
+    if(!/Could not decode/.test(h)) return 'no error card rendered';
+    if(!/header segment/.test(h)) return 'card did not name the segment';
+    return has(h,/JWT/);
+  });
   await t('a Graph audience is called out',       ()=>{ $('jwtIn').value=mkJwt({alg:'RS256'},{iss:'https://sts.windows.net/x/',aud:'https://graph.microsoft.com'}); inspectJwt(); return has($('jwtOut').innerHTML,/not an identity token/); });
 
   /* ---- item 5: the OData filter must survive a hostile app name ---- */

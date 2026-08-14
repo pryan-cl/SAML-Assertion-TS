@@ -1593,10 +1593,23 @@ $('samlXml').addEventListener('click',()=>{
 
 /* ================= JWT ================= */
 const GRAPH=['00000003-0000-0000-c000-000000000000','https://graph.microsoft.com'];
+/* Past the segment count, atob and JSON.parse raise messages a reader cannot
+   act on: a mis-paste surfaced as `Unexpected token '?', "??" is not valid
+   JSON`, full of replacement characters and naming nothing. Anything carrying
+   two dots reaches that point, and the paste box is exactly where a mis-copy
+   arrives. Say which segment failed and how. */
 function parseJwt(raw){
   const t=raw.trim().replace(/^Bearer\s+/i,''), p=t.split('.');
   if(p.length!==3) throw new Error('Expected three dot-separated segments. Got '+p.length+'.');
-  return {head:JSON.parse(dec.decode(b64bytes(p[0]))), body:JSON.parse(dec.decode(b64bytes(p[1]))), parts:p};
+  const seg=(part,label)=>{
+    if(!part) throw new Error(`The ${label} segment is empty. The token has the right number of dots but nothing between them.`);
+    let bytes;
+    try{ bytes=b64bytes(part); }
+    catch(e){ throw new Error(`The ${label} segment is not valid base64url, so this is not a JWT. Check the whole value was copied and that nothing was cut off.`); }
+    try{ return JSON.parse(dec.decode(bytes)); }
+    catch(e){ throw new Error(`The ${label} segment decoded, but it is not JSON. Three dot-separated parts alone do not make a JWT, so check this is a token and not something else.`); }
+  };
+  return {head:seg(p[0],'header'), body:seg(p[1],'payload'), parts:p};
 }
 function inspectJwt(){
   if(oversize('jwtIn','jwtOut','token')) return;
