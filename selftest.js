@@ -73,12 +73,14 @@ async function selfTest(){
   await t('assignment not required is not a finding',   ()=>eq(asg([],null,{id:'sp1',appRoleAssignmentRequired:false}).st.assigned,undefined));
   await t('direct assignment passes',                   ()=>eq(asg([{resourceId:'sp1'}],null).st.assigned,'pass'));
   /* Observed live: the user-side list can carry a group's assignment, with
-     principalType 'Group'. Calling that "directly" names the wrong object. */
+     principalType 'Group'. Calling that "directly" names the wrong object.
+     Fixture names here are invented. Never paste a real group, app or account
+     name out of a tenant into this file: it is a public repository. */
   await t('a group-typed hit is not labelled as direct', ()=>{
-    const r=asg([{resourceId:'sp1',principalType:'Group',principalDisplayName:'GarbageTest'}],null);
+    const r=asg([{resourceId:'sp1',principalType:'Group',principalDisplayName:'Example Staff Group'}],null);
     if(r.st.assigned!=='pass') return `verdict ${r.st.assigned}, expected pass`;
     if(/directly/.test(r.rows)) return 'reported a group assignment as direct';
-    if(!/GarbageTest/.test(r.rows)) return 'did not name the group';
+    if(!/Example Staff Group/.test(r.rows)) return 'did not name the group';
     return has(r.rows,/through a group/);
   });
   await t('a user-typed hit is still labelled as direct', ()=>
