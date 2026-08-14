@@ -671,6 +671,31 @@ async function selfTest(){
     has($('p-notes').innerText,/report-only/i));
   await t('the assignment note warns against trusting a per-user view', ()=>
     has($('p-notes').innerText,/per-user view/i));
+
+  /* ---- Setup tab claims ----
+     These are read by a district administrator deciding whether to consent, so
+     they have to survive being checked. The session-lifetime claim did not:
+     it said a session could not outlive an hour, and forceRefresh disproved it
+     the same day. MSAL renews through a hidden iframe against the existing
+     Microsoft sign-in, which is why the CSP carries frame-src at all. */
+  await t('Setup does not claim a session expires after an hour', ()=>
+    not($('p-setup').innerText,/cannot outlive/i));
+  await t('Setup states the real guarantee, that nothing resumes the session', ()=>
+    has($('p-setup').innerText,/resume a session later/i));
+  await t('Setup admits the session outlives an hour inside an open tab', ()=>
+    has($('p-setup').innerText,/outlive the first hour/i));
+  /* The claim is only true while offline_access stays out of SCOPES. */
+  await t('the no-refresh-token claim still matches the code', ()=>
+    not(SCOPES.join(' '),/offline_access/));
+  await t('the localStorage claim is scoped to tokens', ()=>{
+    const txt=$('p-setup').innerText;
+    if(!/No tokens in/.test(txt)) return 'still reads as an absolute claim about localStorage';
+    return has(txt,/client and tenant IDs/i);
+  });
+  await t('Setup procedures carry documentation links', ()=>{
+    const n=$('p-setup').querySelectorAll('a[data-doc]').length;
+    return n>=4 ? true : `only ${n} linked steps`;
+  });
   await t('doc() escapes its label', ()=>not(msDoc('cert','<img src=x>'),/<img/));
   await t('doc() opens in a new tab without leaking the opener', ()=>{
     const h=msDoc('cert','x');

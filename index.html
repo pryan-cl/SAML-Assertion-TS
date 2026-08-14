@@ -525,7 +525,7 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
     <p>This is usually the easiest yes. The district creates a single-page app registration in their own tenant, pastes the client ID and their tenant ID into the fields on the Live tenant tab, and gets the full live checks without extending any trust to a vendor. Their app, their tenant, their consent, their revoke button. Nothing to security review on your side because you are not asking for anything.</p>
     <ol>
       <li>Entra admin center &rarr; App registrations &rarr; New registration. Any name. Accounts in this organizational directory only.</li>
-      <li>Redirect URI: platform <b>Single-page application</b>, value is the exact URL of this page.</li>
+      <li>Redirect URI: platform <b>Single-page application</b>, value is the exact URL of this page. See <a data-doc="redirect">redirect URI restrictions</a> and <a data-doc="registerApp">registering an application</a>.</li>
       <li>API permissions &rarr; Microsoft Graph &rarr; Delegated: the scopes marked <em>required</em> under <b>Permissions the live checks need</b> above. Then <b>Grant admin consent</b>.</li>
       <li>Copy the Application (client) ID and the Directory (tenant) ID from the Overview blade into the fields above.</li>
       <li>No client secret. This is a public client and does not need one.</li>
@@ -540,17 +540,17 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
     <ol>
       <li>Register the app in <b>your own</b> tenant. Supported account types: <em>Accounts in any organizational directory</em>.</li>
       <li>Add a <b>Single-page application</b> redirect URI with this page's exact URL. Registering it as <em>Web</em> instead is the single most common mistake and produces AADSTS9002326 about cross-origin token redemption.</li>
-      <li>Complete <b>publisher verification</b> so the consent screen shows your company as verified, and set the privacy statement and terms URLs.</li>
+      <li>Complete <b>publisher verification</b> so the consent screen shows your company as verified, and set the privacy statement and terms URLs. See <a data-doc="publisher">publisher verification</a>.</li>
       <li>Add the delegated permissions marked <em>required</em> above. Do not request <code>offline_access</code>. Without it there is no refresh token, so the session dies with the tab.</li>
     </ol>
     <h3>Admin consent</h3>
-    <p>Every required scope needs an administrator. Either the district admin ticks <em>Consent on behalf of your organization</em> at first sign-in, or you send a consent link ahead of the call:</p>
+    <p>Every required scope needs an administrator. Either the district admin ticks <em>Consent on behalf of your organization</em> at first sign-in, or you send a consent link ahead of the call. See <a data-doc="adminConsent">granting tenant-wide admin consent</a>.</p>
     <pre class="snip">https://login.microsoftonline.com/<b>{district-tenant-id}</b>/adminconsent?client_id=<b>{your-client-id}</b>&redirect_uri=<b>{this-page-url}</b></pre>
     <p>Either way, tell them plainly that consent is tenant-wide and persists until revoked, and show them where to revoke it: Entra admin center &rarr; Enterprise applications &rarr; your app &rarr; Permissions, or delete the service principal outright. Offering the revocation path unprompted is what makes the ask credible.</p>
     <h3>What this page does with the token</h3>
     <ul>
-      <li>MSAL cache is <code>sessionStorage</code>, so closing the tab discards it. No <code>localStorage</code>.</li>
-      <li>No refresh token is requested, so a session cannot outlive roughly an hour.</li>
+      <li>MSAL cache is <code>sessionStorage</code>, so closing the tab discards it. No tokens in <code>localStorage</code>, which holds only the client and tenant IDs described above.</li>
+      <li>No refresh token is requested or stored, so nothing here can resume a session later. Inside an open tab MSAL renews silently against your existing Microsoft sign-in, so the session does outlive the first hour; what it cannot do is survive the tab closing.</li>
       <li>Every call is a GET. There is no write path anywhere in this file.</li>
       <li><b>End session</b> clears the cache and signs out.</li>
     </ul>
@@ -662,6 +662,9 @@ const DOCS={
   signInLogs:  'https://learn.microsoft.com/entra/identity/monitoring-health/concept-sign-ins',
   idTokens:    'https://learn.microsoft.com/entra/identity-platform/id-tokens',
   assign:      'https://learn.microsoft.com/entra/identity/enterprise-apps/assign-user-or-group-access-portal',
+  registerApp: 'https://learn.microsoft.com/entra/identity-platform/quickstart-register-app',
+  publisher:   'https://learn.microsoft.com/entra/identity-platform/publisher-verification-overview',
+  adminConsent:'https://learn.microsoft.com/entra/identity/enterprise-apps/grant-admin-consent',
 };
 const msDoc=(k,label)=>`<a href="${DOCS[k]}" target="_blank" rel="noopener">${esc(label)}</a>`;
 
