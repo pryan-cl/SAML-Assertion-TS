@@ -361,9 +361,9 @@ pre.snip b{color:var(--info);font-weight:400}
       <span class="io-hint">Copies the query and opens Graph Explorer</span>
     </div>
     <div class="io-foot" style="border-top:0">
-      <button class="act" data-ge="/servicePrincipals?$filter=startswith(displayName,'APP_NAME')&amp;$select=id,appId,displayName,preferredSingleSignOnMode,appRoleAssignmentRequired,preferredTokenSigningKeyThumbprint,notificationEmailAddresses,replyUrls,servicePrincipalNames,keyCredentials">App config</button>
-      <button class="act" data-ge="/users/USER?$select=userPrincipalName,mail,proxyAddresses,accountEnabled,userType,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesSamAccountName">User object</button>
-      <button class="act" data-ge="/users/USER/appRoleAssignments">Assignments</button>
+      <button class="act" data-ge="/servicePrincipals?$filter=startswith(displayName,'APP_NAME')&amp;$select=SP_SELECT">App config</button>
+      <button class="act" data-ge="/users/USER?$select=USER_SELECT">User object</button>
+      <button class="act" data-ge="/users/USER/appRoleAssignments" data-ge-note="For a user with many indirect assignments, add the header ConsistencyLevel: eventual and $count=true in Graph Explorer, or the list can come back incomplete.">Assignments</button>
       <button class="act" data-ge="/auditLogs/signIns?$filter=appId eq 'APP_GUID'&amp;$top=15">Sign-in log</button>
       <span class="who" id="geNote">Placeholders are filled from the two fields above.</span>
     </div>
@@ -468,15 +468,12 @@ pre.snip b{color:var(--info);font-weight:400}
 
 <b># App configuration, signing certs, entity IDs, reply URLs</b>
 Get-MgServicePrincipal -Filter "displayName eq 'APP-NAME'" |
-  Select-Object id,appId,displayName,preferredSingleSignOnMode,
-    appRoleAssignmentRequired,preferredTokenSigningKeyThumbprint,
-    notificationEmailAddresses,replyUrls,servicePrincipalNames,keyCredentials |
+  Select-Object <span data-fields="sp"></span> |
   ConvertTo-Json -Depth 5
 
 <b># The affected user, to compare UPN against mail</b>
-Get-MgUser -UserId "jdoe@district.k12.st.us" -Property userPrincipalName,mail,
-  proxyAddresses,accountEnabled,userType,onPremisesSyncEnabled,
-  onPremisesImmutableId,onPremisesSamAccountName | ConvertTo-Json
+Get-MgUser -UserId "jdoe@district.k12.st.us" -Property <span data-fields="user"></span> |
+  ConvertTo-Json
 
 <b># Is the user actually assigned to the app</b>
 Get-MgUserAppRoleAssignment -UserId "jdoe@district.k12.st.us" <b>-ConsistencyLevel eventual -CountVariable c</b> |
@@ -486,8 +483,8 @@ Get-MgUserAppRoleAssignment -UserId "jdoe@district.k12.st.us" <b>-ConsistencyLev
 Get-MgAuditLogSignIn -Filter "appId eq 'APP-GUID'" -Top 15 | ConvertTo-Json -Depth 5</pre>
     <p><code>Directory.Read.All</code> is in that list for the assignment query alone. Microsoft does not accept <code>User.Read.All</code> for <code>appRoleAssignments</code>, and the only lower-privileged alternative it does accept is <code>AppRoleAssignment.ReadWrite.All</code>, a write scope this page will not ask anyone to consent. Drop the assignment query and the first two scopes are enough.</p>
     <p>Graph Explorer equivalents, if they prefer clicking:</p>
-    <pre class="snip">GET /v1.0/servicePrincipals?$filter=startswith(displayName,'APP-NAME')
-GET /v1.0/users/USER?$select=userPrincipalName,mail,proxyAddresses,accountEnabled,userType,onPremisesSyncEnabled,onPremisesImmutableId
+    <pre class="snip">GET /v1.0/servicePrincipals?$filter=startswith(displayName,'APP-NAME')&amp;$select=<span data-fields="sp"></span>
+GET /v1.0/users/USER?$select=<span data-fields="user"></span>
 GET /v1.0/users/USER/appRoleAssignments?$count=true     (with header ConsistencyLevel: eventual)
 GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
   </div>
@@ -677,6 +674,12 @@ function wireDocLinks(){
     if(!u){ a.removeAttribute('href'); a.removeAttribute('target'); return; }
     a.href=u; a.target='_blank'; a.rel='noopener';
   });
+  /* The Setup snippets are static markup too, so their field lists are filled
+     from the same constants rather than typed out a second time. A district
+     admin running a snippet must collect what the analyser will read. */
+  document.querySelectorAll('[data-fields]').forEach(el=>{
+    el.textContent = el.dataset.fields==='user' ? USER_SELECT : SP_SELECT;
+  });
 }
 
 /* The Microsoft.Graph PowerShell SDK serialises property names in PascalCase
@@ -741,6 +744,19 @@ function spQuery(appQ, select){
                       : `startswith(displayName,'${appQ.replace(/'/g,"''")}')`;
   return `/servicePrincipals?$filter=${encodeURIComponent(filter)}&$select=${select}${byId?'':'&$top=10'}`;
 }
+
+/* One definition of what to ask Graph for, used by the live route and by every
+   query the page hands a district admin to run themselves. There used to be
+   five separate lists: the two Setup snippets, the Build a query buttons, the
+   live route, and the analyser's expectations. Only the last two agreed, so a
+   pasted result silently lost the Enabled, Sign-on URL and Token encryption
+   checks, the first of which is a failure-level verdict. The self test asserts
+   these cover every field the analysers read. */
+const SP_SELECT='id,appId,displayName,accountEnabled,preferredSingleSignOnMode,appRoleAssignmentRequired,'+
+  'preferredTokenSigningKeyThumbprint,notificationEmailAddresses,replyUrls,servicePrincipalNames,loginUrl,'+
+  'tokenEncryptionKeyId,keyCredentials';
+const USER_SELECT='id,displayName,userPrincipalName,mail,proxyAddresses,accountEnabled,userType,'+
+  'onPremisesSyncEnabled,onPremisesImmutableId,onPremisesSamAccountName';
 
 /* Shared by Run checks and Refresh sign-ins so the two cannot drift apart. */
 function signInQuery(appId, userQ){
@@ -1218,14 +1234,11 @@ $('runChecks').addEventListener('click', async ()=>{
   const btn=$('runChecks'); btn.disabled=true; btn.textContent='Reading…';
   const parts={}; let errors='';
   const appQ=$('qApp').value.trim(), userQ=$('qUser').value.trim();
-  const SEL='id,appId,displayName,accountEnabled,preferredSingleSignOnMode,appRoleAssignmentRequired,'+
-    'preferredTokenSigningKeyThumbprint,notificationEmailAddresses,replyUrls,servicePrincipalNames,loginUrl,'+
-    'tokenEncryptionKeyId,keyCredentials';
   let sp=null;
 
   if(appQ){
     try{
-      const list=(await g(spQuery(appQ, SEL))).value||[];
+      const list=(await g(spQuery(appQ, SP_SELECT))).value||[];
       if(!list.length) errors+=findRow('fail','Application',`no match for <code>${esc(appQ)}</code>`,
         'Check the exact display name under Enterprise applications. This is a <b>startswith</b> match, so a name carrying a prefix will never be found, and suffixes like "SSO" or "- Staff" are common. Pasting the application ID instead avoids the problem entirely.');
       else{
@@ -1240,7 +1253,7 @@ $('runChecks').addEventListener('click', async ()=>{
 
   if(userQ){
     try{
-      const u=await g(`/users/${encodeURIComponent(userQ)}?$select=id,displayName,userPrincipalName,mail,proxyAddresses,accountEnabled,userType,onPremisesSyncEnabled,onPremisesImmutableId,onPremisesSamAccountName`);
+      const u=await g(`/users/${encodeURIComponent(userQ)}?$select=${USER_SELECT}`);
       parts.usr=analyseUser(u);
       try{
         /* ConsistencyLevel eventual with $count is what Microsoft documents as
@@ -1329,7 +1342,13 @@ const GE_BASE='https://developer.microsoft.com/en-us/graph/graph-explorer';
 document.querySelectorAll('[data-ge]').forEach(btn=>{
   btn.addEventListener('click', ()=>{
     const app=$('qApp').value.trim(), user=$('qUser').value.trim();
+    /* SP_SELECT and USER_SELECT are substituted from the same constants the
+       live route uses, so a query handed to a district admin always collects
+       what the analyser will look for. USER_SELECT is replaced before USER, or
+       the shorter token would eat the longer one. */
     const path=btn.dataset.ge
+      .replace(/SP_SELECT/g, SP_SELECT)
+      .replace(/USER_SELECT/g, USER_SELECT)
       .replace(/APP_NAME/g, app.replace(/'/g,"''") || 'APP_NAME')
       .replace(/APP_GUID/g, GUID_RE.test(app)?app:'APP_GUID')
       .replace(/USER/g, user?encodeURIComponent(user):'USER');
@@ -1354,6 +1373,9 @@ document.querySelectorAll('[data-ge]').forEach(btn=>{
       const bits=[first];
       if(blocked) bits.push('Graph Explorer did not open, so the popup was blocked.');
       bits.push(tail);
+      /* A caveat that belongs to one query only, such as the header this page
+         cannot express in a copied URL. */
+      if(btn.dataset.geNote) bits.push(esc(btn.dataset.geNote));
       $('geNote').innerHTML=bits.join(' ');
     };
     if(blocked) showQuery();

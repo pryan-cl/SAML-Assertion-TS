@@ -672,6 +672,64 @@ async function selfTest(){
   await t('the assignment note warns against trusting a per-user view', ()=>
     has($('p-notes').innerText,/per-user view/i));
 
+  /* ---- Graph field selection ----
+     There used to be five separate lists of what to select: two Setup
+     snippets, the Build a query buttons, the live route, and whatever the
+     analysers happened to read. Only the last two agreed, so a district admin
+     who ran the handed-out query and pasted the result silently lost the
+     Enabled, Sign-on URL and Token encryption checks. Enabled is a failure
+     verdict. These read the field names straight out of the analyser source,
+     so adding a new read without adding it to the constant fails here. */
+  const readsOf=(fn,v)=>Array.from(new Set(
+    Array.from(String(fn).matchAll(new RegExp(`\\b${v}\\.([A-Za-z]\\w*)`,'g')), m=>m[1])));
+
+  await t('SP_SELECT covers every service principal field the analyser reads', ()=>{
+    const reads=readsOf(analyseServicePrincipal,'sp').filter(f=>!['length','map','filter','forEach'].includes(f));
+    const missing=reads.filter(f=>!SP_SELECT.split(',').includes(f));
+    return missing.length?`analyser reads but SP_SELECT omits: ${missing.join(', ')}`:true;
+  });
+  await t('SP_SELECT covers what analyseAssignments reads too', ()=>{
+    const reads=readsOf(analyseAssignments,'sp');
+    const missing=reads.filter(f=>!SP_SELECT.split(',').includes(f));
+    return missing.length?`omitted: ${missing.join(', ')}`:true;
+  });
+  await t('USER_SELECT covers every user field the analyser reads', ()=>{
+    const reads=readsOf(analyseUser,'u').filter(f=>!['length','map','filter','slice','toLowerCase'].includes(f));
+    const missing=reads.filter(f=>!USER_SELECT.split(',').includes(f));
+    return missing.length?`analyser reads but USER_SELECT omits: ${missing.join(', ')}`:true;
+  });
+  await t('the handed-out queries carry no hardcoded field list', ()=>{
+    const bad=Array.from(document.querySelectorAll('[data-ge]'))
+      .filter(b=>/\$select=[a-z]/i.test(b.dataset.ge)&&!/\$select=(SP|USER)_SELECT/.test(b.dataset.ge))
+      .map(b=>b.textContent);
+    return bad.length?`hardcoded select in: ${bad.join(', ')}`:true;
+  });
+  await t('the handed-out app query expands to the full field set', ()=>{
+    const btn=Array.from(document.querySelectorAll('[data-ge]')).find(b=>/servicePrincipals/.test(b.dataset.ge));
+    const expanded=btn.dataset.ge.replace('SP_SELECT',SP_SELECT);
+    const missing=SP_SELECT.split(',').filter(f=>!expanded.includes(f));
+    return missing.length?`missing after expansion: ${missing.join(', ')}`:true;
+  });
+  await t('the Setup snippets are filled from the same constants', ()=>{
+    const spans=Array.from(document.querySelectorAll('[data-fields]'));
+    if(spans.length<3) return `only ${spans.length} field placeholders found`;
+    const bad=spans.filter(el=>el.textContent!==(el.dataset.fields==='user'?USER_SELECT:SP_SELECT));
+    return bad.length?`${bad.length} snippet(s) not filled from the constants`:true;
+  });
+  await t('a pasted result from the handed-out query keeps the Enabled check', ()=>{
+    const sp={displayName:'T',appId:'a',id:'sp1',preferredSingleSignOnMode:'saml',accountEnabled:false,
+      appRoleAssignmentRequired:true,notificationEmailAddresses:[],tokenEncryptionKeyId:'k',
+      preferredTokenSigningKeyThumbprint:hex,keyCredentials:[]};
+    const trimmed={}; SP_SELECT.split(',').forEach(f=>{ if(f in sp) trimmed[f]=sp[f]; });
+    const rows=analyseServicePrincipal(trimmed).rows;
+    if(!/Enabled/.test(rows)) return 'the disabled-app verdict disappeared';
+    return has(rows,/Token encryption/);
+  });
+  await t('the assignments query warns about incomplete results', ()=>{
+    const btn=Array.from(document.querySelectorAll('[data-ge]')).find(b=>/appRoleAssignments/.test(b.dataset.ge));
+    return has(btn.dataset.geNote||'',/ConsistencyLevel/);
+  });
+
   /* ---- Setup tab claims ----
      These are read by a district administrator deciding whether to consent, so
      they have to survive being checked. The session-lifetime claim did not:
