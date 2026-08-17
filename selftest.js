@@ -1078,6 +1078,154 @@ async function selfTest(){
     return has($('liveOut').innerHTML,/Could not parse/);
   });
 
+  /* ---- SP metadata tab ----
+     The comparison this tab exists for is the one nobody can do by eye, so the
+     near-miss classifier gets a case per category rather than one happy path. */
+  await t('urlMatch calls an exact match exact',    ()=>eq(urlMatch('https://a/acs','https://a/acs').kind,'exact'));
+  await t('urlMatch spots a case-only difference',  ()=>eq(urlMatch('https://a/ACS','https://a/acs').kind,'case'));
+  await t('urlMatch spots a trailing slash',        ()=>eq(urlMatch('https://a/acs/','https://a/acs').kind,'slash'));
+  await t('urlMatch spots case and slash together', ()=>eq(urlMatch('https://a/ACS/','https://a/acs').kind,'caseslash'));
+  await t('urlMatch spots an http/https difference',()=>eq(urlMatch('http://a/acs','https://a/acs').kind,'scheme'));
+  await t('urlMatch spots a same-host path change', ()=>eq(urlMatch('https://a/other','https://a/acs').kind,'path'));
+  await t('urlMatch spots a different host',        ()=>eq(urlMatch('https://b/acs','https://a/acs').kind,'host'));
+  await t('urlMatch survives a non-URL entity ID',  ()=>eq(urlMatch('urn:sp:one','urn:sp:two').kind,'other'));
+  await t('a URN against a URL is not called a host difference',
+    ()=>eq(urlMatch('urn:example:sp','https://sp.example/x').kind,'other'));
+  /* Every why is spliced into "it …" and "which …", so a noun phrase there
+     produced "it a different host" in the cross-check. */
+  await t('every urlMatch reason reads as a verb phrase', ()=>{
+    const pairs=[['https://a/x','https://a/X'],['https://a/x/','https://a/x'],['https://a/X/','https://a/x'],
+      ['http://a/x','https://a/x'],['https://a/y','https://a/x'],['https://b/x','https://a/x'],['urn:a','urn:b']];
+    const bad=pairs.map(p=>urlMatch(p[0],p[1]).why).filter(w=>!/^(differs|is|does)\b/.test(w));
+    return bad.length?`reads wrong after "it": ${bad.join(' | ')}`:true;
+  });
+  await t('a case-only difference is still a failure', ()=>eq(urlMatch('https://a/ACS','https://a/acs').state,'fail'));
+  await t('bestMatch returns the exact one, not the first',
+    ()=>eq(bestMatch('https://a/acs',['https://z/acs','https://a/acs']).cand,'https://a/acs'));
+  await t('bestMatch prefers a near miss over a different host',
+    ()=>eq(bestMatch('https://a/acs',['https://z/acs','https://a/acs/']).m.kind,'slash'));
+
+  const spMeta=(o={})=>`<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${o.entityId||'https://sp.example'}"${o.validUntil?` validUntil="${o.validUntil}"`:''}>
+  <md:${o.role||'SPSSODescriptor'} protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"${o.was!=null?` WantAssertionsSigned="${o.was}"`:''}>
+    ${o.cert?`<md:KeyDescriptor${o.use?` use="${o.use}"`:''}><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>${o.cert}</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor>`:''}
+    ${(o.nameIds||['urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress']).map(f=>`<md:NameIDFormat>${f}</md:NameIDFormat>`).join('')}
+    <md:${o.role==='IDPSSODescriptor'?'SingleSignOnService':'AssertionConsumerService'} Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${o.acs||'https://sp.example/acs'}" index="0" isDefault="true"/>
+  </md:${o.role||'SPSSODescriptor'}>
+</md:EntityDescriptor>`;
+
+  /* new Date(null) is the epoch, so an absent attribute used to arrive as
+     1 January 1970 and be reported as expired twenty thousand days ago. This
+     is shared with the SAML tab's Conditions and IssueInstant handling. */
+  await t('an absent date is absent, not 1970',   ()=>eq(dt(null),null));
+  await t('an empty date string is absent',       ()=>eq(dt(''),null));
+  await t('a real date still parses',             ()=>eq(dt('2026-01-02T03:04:05Z').getUTCFullYear(),2026));
+  await t('an assertion with no Conditions window is not called expired', async ()=>{
+    $('samlIn').value=`<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status><saml:Assertion><saml:Issuer>x</saml:Issuer><saml:Conditions/></saml:Assertion></samlp:Response>`;
+    await inspectSaml();
+    return not($('samlOut').innerHTML,/1970|expired 2\d{4}/);
+  });
+
+  await t('metadata entity ID is read',      ()=>eq(parseSpMetadata(spMeta()).entityId,'https://sp.example'));
+  await t('metadata ACS location is read',   ()=>eq(parseSpMetadata(spMeta()).acs[0].location,'https://sp.example/acs'));
+  await t('metadata ACS binding is shortened',()=>eq(parseSpMetadata(spMeta()).acs[0].binding,'HTTP-POST'));
+  await t('metadata NameID format is read',  ()=>eq(parseSpMetadata(spMeta()).nameIdFormats.length,1));
+  await t('an SP document is labelled sp',   ()=>eq(parseSpMetadata(spMeta()).role,'sp'));
+  await t('an IdP document is labelled idp', ()=>eq(parseSpMetadata(spMeta({role:'IDPSSODescriptor'})).role,'idp'));
+  await t('a KeyDescriptor with no use is not called signing-only',
+    ()=>has(parseSpMetadata(spMeta({cert:btoa('x')})).keys[0].use,/signing and encryption/));
+  await t('a KeyDescriptor use attribute is kept',
+    ()=>eq(parseSpMetadata(spMeta({cert:btoa('x'),use:'encryption'})).keys[0].use,'encryption'));
+  await t('an EntitiesDescriptor picks the entity carrying a role', ()=>eq(
+    parseSpMetadata(`<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"><md:EntityDescriptor entityID="https://nothing"/>${spMeta()}</md:EntitiesDescriptor>`).entityId,
+    'https://sp.example'));
+
+  const spWhy=async v=>{ try{ parseSpMetadata(v); return 'accepted it'; }catch(e){ return e.message; } };
+  await t('empty metadata is refused',          async ()=>has(await spWhy(''),/Paste/));
+  await t('base64 metadata is refused by name', async ()=>has(await spWhy(btoa('<x/>')),/not base64/));
+  await t('malformed XML names the likely cause',async ()=>has(await spWhy('<md:EntityDescriptor'),/well-formed|partial/));
+  await t('a SAML Response is sent to the right tab',
+    async ()=>has(await spWhy('<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"/>'),/SAML message/));
+  await t('an EntityDescriptor with no role says so',
+    async ()=>has(await spWhy('<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="x"/>'),/neither/));
+
+  const spInspect=async (xml)=>{ $('spIn').value=xml; $('spOut').innerHTML='SENTINEL'; await inspectSpMetadata(); return $('spOut').innerHTML; };
+  await t('a healthy document renders a verdict', async ()=>{
+    const h=await spInspect(spMeta());
+    return h==='SENTINEL' ? 'panel left stale' : has(h,/Entity ID/);
+  });
+  await t('metadata with no validUntil says nothing about expiry', async ()=>
+    not(await spInspect(spMeta()),/Metadata expires/));
+  await t('metadata with a validUntil still reports it', async ()=>
+    has(await spInspect(spMeta({validUntil:'2030-01-01T00:00:00Z'})),/Metadata expires/));
+  await t('an IdP document warns it is the wrong half', async ()=>has(await spInspect(spMeta({role:'IDPSSODescriptor'})),/wrong half/));
+  await t('the SP certificate is not offered as comparable to the assertion signing certificate',
+    async ()=>has(await spInspect(spMeta({cert:btoa('x')})),/Comparing a thumbprint across the two is meaningless/));
+  await t('an undecodable certificate does not lose the rest of the document', async ()=>{
+    const h=await spInspect(spMeta({cert:'!!! not base64 !!!'}));
+    return /not decodable/.test(h) ? has(h,/Entity ID/) : 'did not explain the bad certificate';
+  });
+  await t('metadata values are escaped into the output', async ()=>
+    not(await spInspect(spMeta({entityId:'https://x/"><img src=x onerror=alert(1)>'})),/<img /));
+  await t('an oversized metadata paste is refused', async ()=>{
+    $('spIn').value='<'+'x'.repeat(MAX_INPUT+1);
+    await inspectSpMetadata();
+    const okNow=/Input too large/.test($('spOut').innerHTML);
+    $('spIn').value=''; $('spOut').innerHTML='';
+    return okNow?true:'accepted an oversized document';
+  });
+
+  /* ---- the cross-check, which is the reason this tab exists ---- */
+  seen.saml=null; seen.entra=null; seen.sp=null;
+  await t('with nothing loaded the cross-check says so, rather than passing',
+    async ()=>has(await spInspect(spMeta()),/Nothing loaded to compare/));
+  await t('a matching audience passes the cross-check', async ()=>{
+    seen.saml={audiences:['https://sp.example'],destination:'https://sp.example/acs',recipient:'',nameIdFormat:'',issuer:''};
+    return has(await spInspect(spMeta()),/the audience|will accept the audience/);
+  });
+  await t('an audience differing by a trailing slash fails the cross-check', async ()=>{
+    seen.saml={audiences:['https://sp.example/'],destination:'',recipient:'',nameIdFormat:'',issuer:''};
+    return has(await spInspect(spMeta()),/differs only by a trailing slash/);
+  });
+  await t('a reply URL mismatch against Entra names AADSTS50011', async ()=>{
+    seen.saml=null;
+    seen.entra={displayName:'X',entityIds:['https://sp.example'],replyUrls:['https://sp.example/ACS'],encrypted:false};
+    return has(await spInspect(spMeta()),/AADSTS50011/);
+  });
+  await t('an encryption key offered but unused is not called a fault', async ()=>{
+    seen.saml=null;
+    seen.entra={displayName:'X',entityIds:[],replyUrls:[],encrypted:false};
+    return has(await spInspect(spMeta({cert:btoa('x'),use:'encryption'})),/an offer, not a demand/);
+  });
+
+  /* The SAML tab is the other half: its audience row can only say "present"
+     until metadata is loaded, and must say "wrong" once it is. */
+  seen.saml=null; seen.entra=null; seen.sp=null;
+  await t('the SAML audience row asks for metadata when none is loaded',
+    async ()=>has(await inspect(btoa('x')),/SP metadata<\/b> tab and this row compares/));
+  await t('the SAML audience row confirms a match once metadata is loaded', async ()=>{
+    seen.sp=parseSpMetadata(spMeta());
+    return has(await inspect(btoa('x')),/so the audience is right/);
+  });
+  await t('the SAML audience row calls a near miss wrong, not merely present', async ()=>{
+    seen.sp=parseSpMetadata(spMeta({entityId:'https://sp.example/'}));
+    return has(await inspect(btoa('x')),/differs only by a trailing slash/);
+  });
+  await t('a Destination with no matching ACS URL is called out', async ()=>{
+    seen.sp=parseSpMetadata(spMeta({acs:'https://sp.example/saml/consume'}));
+    return has(await inspect(btoa('x')),/No assertion consumer service URL/);
+  });
+  await t('inspecting an assertion records it for the other tab', async ()=>{
+    seen.saml=null; seen.sp=null;
+    await inspect(btoa('x'));
+    return seen.saml && seen.saml.audiences[0]==='https://sp.example' ? true : 'assertion not captured';
+  });
+  await t('clearing the SP tab drops the captured metadata', ()=>{
+    seen.sp={entityId:'x'}; $('spGo'); $('spClear').click();
+    return eq(seen.sp,null);
+  });
+  seen.saml=null; seen.entra=null; seen.sp=null;
+  $('spIn').value=''; $('spOut').innerHTML='';
+
   /* Leave no fixture behind, in the inputs or in memory. clearPasted() also
      drops liveOut, which the results table below then fills. */
   clearPasted();

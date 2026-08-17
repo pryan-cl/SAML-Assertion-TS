@@ -282,6 +282,7 @@ pre.snip b{color:var(--info);font-weight:400}
     <div class="nav-group">Diagnostics</div>
     <button class="chan" role="tab" id="tab-live" aria-selected="true" data-panel="p-live" data-title="Live tenant"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg><span class="nav-label">Live tenant</span></button>
     <button class="chan" role="tab" id="tab-saml" aria-selected="false" data-panel="p-saml" data-title="SAML message"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M4.3 21a2 2 0 0 0 1.7 1h12a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v3"/><path d="m9 18-1.5-1.5"/><circle cx="5" cy="14" r="3"/></svg><span class="nav-label">SAML message</span></button>
+    <button class="chan" role="tab" id="tab-sp" aria-selected="false" data-panel="p-sp" data-title="SP metadata"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/></svg><span class="nav-label">SP metadata</span></button>
     <button class="chan" role="tab" id="tab-jwt" aria-selected="false" data-panel="p-jwt" data-title="OIDC token"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg><span class="nav-label">OIDC token</span></button>
     <div class="nav-group">Reference</div>
     <button class="chan" role="tab" id="tab-err" aria-selected="false" data-panel="p-err" data-title="AADSTS code"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg><span class="nav-label">AADSTS code</span></button>
@@ -387,6 +388,23 @@ pre.snip b{color:var(--info);font-weight:400}
     </div>
   </div>
   <div id="samlOut"></div>
+</section>
+
+<!-- ============ SP METADATA ============ -->
+<section id="p-sp" role="tabpanel" aria-labelledby="tab-sp" class="hidden">
+  <div class="io">
+    <div class="io-head">
+      <span class="io-label">Service provider metadata</span>
+      <span class="io-hint">Paste the XML. This page cannot fetch it for you — see the note below</span>
+    </div>
+    <textarea id="spIn" spellcheck="false" placeholder="Paste the SP's SAML metadata, starting &lt;EntityDescriptor ... or &lt;md:EntityDescriptor ...&#10;&#10;Most service providers publish it at a URL. Open that URL in a tab and copy what it returns."></textarea>
+    <div class="io-foot">
+      <button class="act primary" id="spGo">Inspect metadata</button>
+      <button class="act" id="spClear">Clear</button>
+      <span class="who" id="spNote">Inspect an assertion on <b>SAML message</b>, or run checks on <b>Live tenant</b>, and this tab compares the two sides.</span>
+    </div>
+  </div>
+  <div id="spOut"></div>
 </section>
 
 <!-- ============ JWT ============ -->
@@ -731,9 +749,24 @@ function b64bytes(s){
   return out;
 }
 const dec=new TextDecoder('utf-8');
-const dt = s => { const d=new Date(s); return isNaN(d)?null:d; };
+/* getAttribute returns null for an absent attribute, and new Date(null) is the
+   epoch rather than an Invalid Date, so a missing NotOnOrAfter, IssueInstant or
+   validUntil read as 1 January 1970 and was then reported as expired twenty
+   thousand days ago. Absent has to stay absent. */
+const dt = s => { if(s==null||s==='') return null; const d=new Date(s); return isNaN(d)?null:d; };
 const daysLeft = d => (d - Date.now())/86400000;
 const GUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/* What the other tabs last read, so a tab can say a value is *wrong* rather
+   than merely present. Until the SP metadata tab existed nothing here had two
+   sides to compare: the audience check could confirm an <Audience> element was
+   there and nothing more.
+
+   Deliberately in memory only. It is never persisted and never rendered as a
+   block of its own, so closing the tab ends it, which keeps the promise the
+   footer makes. Each field is captured at the end of a successful analysis, so
+   a failed parse leaves the previous side intact rather than half-replacing it. */
+const seen={saml:null, sp:null, entra:null};
 
 /* Built as a function so the self test can assert the encoding. The filter
    needs OData quote doubling and percent-encoding: without the second, an app
@@ -1005,6 +1038,13 @@ function graphHint(e){
 /* ==================== analysis shared by live and paste ==================== */
 function analyseServicePrincipal(sp){
   const st={}; let rows='';
+  /* The identity provider side of the cross-check on the SP metadata tab. */
+  seen.entra={
+    displayName: sp.displayName||'',
+    entityIds: (sp.servicePrincipalNames||[]).filter(x=>x!==sp.appId),
+    replyUrls: sp.replyUrls||[],
+    encrypted: !!sp.tokenEncryptionKeyId
+  };
   rows+=findRow('info','Application',`<code>${esc(sp.displayName||'—')}</code>`,
     `App ID <code>${esc(sp.appId||'—')}</code> &middot; object ID <code>${esc(sp.id||'—')}</code>`);
   const mode=sp.preferredSingleSignOnMode;
@@ -1558,11 +1598,23 @@ async function inspectSaml(){
     out.innerHTML=card('Could not parse',findRow('fail','XML','Decoded but not well-formed. It may be truncated.')); return;
   }
   const root=doc.documentElement, kind=root.localName, now=Date.now(), states={};
+  /* Captured for the SP metadata tab to compare against. Assigned to seen.saml
+     only once the analysis completes, so a mid-way throw cannot leave half of
+     one assertion sitting next to half of the last. */
+  const cap={audiences:[],destination:'',recipient:'',nameIdFormat:'',issuer:''};
   let html='',rows='';
   rows+=findRow('info','Message type',`<code>${esc(kind)}</code>`,'Encoded as '+esc(how));
-  const dest=root.getAttribute('Destination');
-  rows+=findRow(dest?'info':'na','Destination',dest?`<code>${esc(dest)}</code>`:'not present',
-    dest?'Must be a registered reply URL. A mismatch is AADSTS50011.':'');
+  const dest=root.getAttribute('Destination'); cap.destination=dest||'';
+  let destState=dest?'info':'na';
+  let destNote=dest?'Must be a registered reply URL. A mismatch is AADSTS50011.':'';
+  if(dest&&seen.sp&&seen.sp.acs.length){
+    const b=bestMatch(dest,seen.sp.acs.map(a=>a.location));
+    destState=b.m.state==='pass'?'pass':'fail';
+    destNote=b.m.state==='pass'
+      ? 'Equal to an assertion consumer service URL in the metadata on the <b>SP metadata</b> tab.'
+      : `No assertion consumer service URL on the <b>SP metadata</b> tab matches. Closest is <code>${esc(b.cand)}</code>, which ${esc(b.m.why)}. This is what AADSTS50011 reports.`;
+  }
+  rows+=findRow(destState,'Destination',dest?`<code>${esc(dest)}</code>`:'not present',destNote);
   const irt=root.getAttribute('InResponseTo');
   rows+=findRow(irt?'info':'warn','InResponseTo',irt?`<code>${esc(irt)}</code>`:'absent',
     irt?'SP-initiated flow.':'IdP-initiated flow. SPs configured for SP-initiated only will reject an unsolicited response.');
@@ -1600,10 +1652,21 @@ async function inspectSaml(){
       iss.includes('sts.windows.net')?(tm?`Entra ID, tenant <code>${esc(tm[1])}</code>.`:'Entra ID SAML issuer.')
         :'Not the usual Entra format (<code>https://sts.windows.net/{tenantId}/</code>). Confirm which IdP signed this.');
     const auds=L(asrt,'Audience').map(txt).filter(Boolean);
+    cap.audiences=auds; cap.issuer=iss;
     states.audience=auds.length?'info':'fail';
-    rows+=findRow(states.audience,'Audience',auds.length?auds.map(a=>`<code>${esc(a)}</code>`).join('<br>'):'missing',
-      'Compare character for character against the SP entity ID. Trailing slash and http/https differences are the most common single cause of rejection.');
+    /* Without the SP side this can only confirm an Audience exists. With it,
+       the check becomes the one people actually want: is this value correct. */
+    let audNote='Compare character for character against the SP entity ID. Trailing slash and http/https differences are the most common single cause of rejection. Load the provider\'s metadata on the <b>SP metadata</b> tab and this row compares them for you.';
+    if(auds.length&&seen.sp&&seen.sp.entityId){
+      const b=bestMatch(seen.sp.entityId,auds);
+      states.audience=b.m.state==='pass'?'pass':'fail';
+      audNote=b.m.state==='pass'
+        ? 'Equal to the entity ID in the metadata on the <b>SP metadata</b> tab, so the audience is right.'
+        : `Not equal to the entity ID on the <b>SP metadata</b> tab (<code>${esc(seen.sp.entityId)}</code>); it ${esc(b.m.why)}. The provider rejects this before checking anything else.`;
+    }
+    rows+=findRow(states.audience,'Audience',auds.length?auds.map(a=>`<code>${esc(a)}</code>`).join('<br>'):'missing',audNote);
     const nid=first(asrt,'NameID'), fmt=nid?(nid.getAttribute('Format')||''):'';
+    cap.nameIdFormat=fmt;
     rows+=findRow(nid?'info':'fail','NameID',nid?`<code>${esc(txt(nid))}</code>`:'missing');
     rows+=findRow(fmt?'info':'warn','NameID format',`<code>${esc(fmt.split(':').pop()||'not set')}</code>`,
       /emailAddress/.test(fmt)?'Email format.'
@@ -1622,7 +1685,7 @@ async function inspectSaml(){
       const sna=dt(scd.getAttribute('NotOnOrAfter'));
       const [ss,snote]=windowState(null,sna,now);
       rows+=findRow(ss,'Subject confirmation',`<code>${sna?esc(sna.toISOString()):'—'}</code>`,snote+'.');
-      const rc=scd.getAttribute('Recipient');
+      const rc=scd.getAttribute('Recipient'); cap.recipient=rc||'';
       if(rc) rows+=findRow('info','Recipient',`<code>${esc(rc)}</code>`,'Should equal the ACS URL.');
     }
     const authn=first(asrt,'AuthnStatement');
@@ -1700,6 +1763,7 @@ async function inspectSaml(){
   const label={fail:'One or more checks failed. Work left to right.',warn:'Nothing fatal, but read the flagged rows.',
     pass:'Structural checks pass. If the SP still rejects it, the disagreement is on the SP side.',
     info:'Decoded. Review below.',na:'Decoded.'}[worst];
+  seen.saml=cap;
   out.innerHTML=strip(segs,label)+html; animateStrip();
 }
 /* Backstop. inspectSaml is long and async, so anything it throws would
@@ -1712,7 +1776,7 @@ $('samlGo').addEventListener('click',()=>{
         'This is a fault in the page, not a verdict on the assertion. The most common cause is a truncated paste. Re-copy the full value and try again.'));
   });
 });
-$('samlClear').addEventListener('click',()=>{$('samlIn').value='';$('samlOut').innerHTML='';});
+$('samlClear').addEventListener('click',()=>{$('samlIn').value='';$('samlOut').innerHTML='';seen.saml=null;});
 $('samlXml').addEventListener('click',()=>{
   if(oversize('samlIn','samlOut','SAML message')) return;
   try{
@@ -1721,6 +1785,312 @@ $('samlXml').addEventListener('click',()=>{
       `<div style="padding:13px"><pre class="mono" style="margin:0;white-space:pre-wrap">${esc(xml.replace(/></g,'>\n<'))}</pre></div>`);
   }catch(e){ $('samlOut').innerHTML=card('Could not decode',findRow('fail','Decoder',esc(e.message))); }
 });
+
+/* ================= SP METADATA =================
+   The service provider half of a federation. Every other tab reads what the
+   identity provider produced; this reads what the service provider expects,
+   which is the only way to call an audience or an ACS URL *wrong* rather than
+   merely present.
+
+   Paste only, and the hint says so. Fetching metadata from its published URL
+   would need the SP to send CORS headers naming this origin, which no SP does,
+   and proxying it would put a server in the path of a page whose entire promise
+   is that nothing leaves the browser. */
+
+/* Entra compares reply URLs exactly: case counts and a trailing slash counts.
+   So a near miss is still a failure, but the repair differs by which near miss
+   it is, and a bare "no match" sends people hunting through the wrong screen.
+   kind is what the self test asserts on; why is what the reader sees. */
+function urlMatch(a,b){
+  a=String(a==null?'':a); b=String(b==null?'':b);
+  if(a===b) return {state:'pass',kind:'exact',why:'exact match'};
+  const trim=s=>s.replace(/\/+$/,'');
+  const ci=a.toLowerCase()===b.toLowerCase(), ts=trim(a)===trim(b);
+  if(ci) return {state:'fail',kind:'case',why:'differs only by letter case'};
+  if(ts) return {state:'fail',kind:'slash',why:'differs only by a trailing slash'};
+  if(trim(a).toLowerCase()===trim(b).toLowerCase())
+    return {state:'fail',kind:'caseslash',why:'differs by letter case and a trailing slash'};
+  let ua,ub;
+  /* Entity IDs are URIs but not always URLs, so this has to survive a value the
+     URL parser refuses. The case and slash tests above already ran, and they are
+     the ones that earn their keep. */
+  try{ ua=new URL(a); ub=new URL(b); }catch(e){ return {state:'fail',kind:'other',why:'does not match'}; }
+  /* urn: parses as a URL with an empty host, so a URN entity ID satisfied the
+     host comparison and came back as "same host, different path", or as "a
+     different host" when compared against a URL. Neither value has a host, and
+     saying so to someone staring at two URNs sends them to the wrong screen. */
+  if(!ua.host||!ub.host) return {state:'fail',kind:'other',why:'does not match'};
+  if(ua.host.toLowerCase()===ub.host.toLowerCase()){
+    if(ua.protocol!==ub.protocol && ua.pathname===ub.pathname && ua.search===ub.search)
+      return {state:'fail',kind:'scheme',
+        why:`differs only by scheme, ${ua.protocol.replace(':','')} against ${ub.protocol.replace(':','')}`};
+    return {state:'fail',kind:'path',why:'is the same host with a different path'};
+  }
+  return {state:'fail',kind:'host',why:'is a different host'};
+}
+const MATCH_RANK={exact:0,case:1,slash:1,caseslash:1,scheme:2,path:3,host:4,other:4};
+/* The closest candidate, so a failure can name the one the reader meant rather
+   than listing everything registered. */
+function bestMatch(target,list){
+  let best=null;
+  (list||[]).forEach(c=>{
+    const m=urlMatch(target,c);
+    if(!best||MATCH_RANK[m.kind]<MATCH_RANK[best.m.kind]) best={cand:c,m};
+  });
+  return best;
+}
+
+function parseSpMetadata(raw){
+  const s=String(raw==null?'':raw).trim();
+  if(!s) throw new Error('Paste the service provider metadata first.');
+  if(!s.startsWith('<')) throw new Error('This does not start with "<". SAML metadata is an XML document, not base64 and not a URL. If you have the URL, open it in a tab and copy what it returns.');
+  const doc=new DOMParser().parseFromString(s,'application/xml');
+  if(doc.getElementsByTagName('parsererror').length)
+    throw new Error('Decoded but not well-formed XML. The usual cause is a partial copy, so re-copy the whole document including the closing tag.');
+  const root=doc.documentElement;
+  if(root.localName==='Response'||root.localName==='AuthnRequest'||root.localName==='LogoutRequest')
+    throw new Error(`This is a SAML ${root.localName}, not metadata. The <b>SAML message</b> tab reads those.`);
+  /* A federation may publish many entities in one file. Take the first that
+     describes a role, not simply the first child, or an aggregate beginning with
+     a signature-only entry reads as empty. */
+  let ed=root;
+  if(root.localName==='EntitiesDescriptor'){
+    ed=L(root,'EntityDescriptor').find(e=>first(e,'SPSSODescriptor')||first(e,'IDPSSODescriptor'))
+       ||first(root,'EntityDescriptor')||root;
+  }
+  if(ed.localName!=='EntityDescriptor')
+    throw new Error(`Expected an <EntityDescriptor> at the root. Found <${esc(ed.localName)}>.`);
+  const spd=first(ed,'SPSSODescriptor'), idpd=first(ed,'IDPSSODescriptor');
+  if(!spd&&!idpd)
+    throw new Error('This <EntityDescriptor> carries neither an <SPSSODescriptor> nor an <IDPSSODescriptor>, so there is nothing here to check.');
+  const d=spd||idpd;
+  const svc=name=>L(d,name).map(e=>({
+    binding:(e.getAttribute('Binding')||'').split(':').pop(),
+    location:e.getAttribute('Location')||'',
+    index:e.getAttribute('index')||'',
+    isDefault:e.getAttribute('isDefault')==='true'
+  })).filter(x=>x.location);
+  return {
+    role: spd?'sp':'idp',
+    both: !!(spd&&idpd),
+    entityId: ed.getAttribute('entityID')||'',
+    validUntil: dt(ed.getAttribute('validUntil')),
+    wantAssertionsSigned: d.getAttribute('WantAssertionsSigned'),
+    authnRequestsSigned: d.getAttribute('AuthnRequestsSigned'),
+    acs: svc('AssertionConsumerService'),
+    slo: svc('SingleLogoutService'),
+    sso: svc('SingleSignOnService'),
+    nameIdFormats: L(d,'NameIDFormat').map(txt).filter(Boolean),
+    /* An absent use attribute means the key serves both purposes, which is what
+       the SAML metadata schema says and not what a reader assumes. */
+    keys: L(d,'KeyDescriptor').map(k=>({
+      use:(k.getAttribute('use')||'signing and encryption').toLowerCase(),
+      cert:txt(first(k,'X509Certificate'))
+    })).filter(k=>k.cert),
+    org: txt(first(ed,'OrganizationDisplayName')),
+    contacts: L(ed,'ContactPerson').map(c=>txt(first(c,'EmailAddress'))).filter(Boolean)
+  };
+}
+
+/* Both other tabs feed this. Rows appear only for a side that has been loaded,
+   because an empty comparison rendered as a row reads like a passed check. */
+function crossCheckRows(md){
+  let rows='', worst='na';
+  const bump=s=>{ if(WORST.indexOf(s)>WORST.indexOf(worst)) worst=s; };
+  const add=(st,k,v,n)=>{ bump(st); rows+=findRow(st,k,v,n); };
+
+  if(seen.saml){
+    const auds=seen.saml.audiences||[];
+    if(auds.length&&md.entityId){
+      const b=bestMatch(md.entityId,auds);
+      add(b.m.state,'Audience in the assertion',`<code>${esc(b.cand)}</code>`,
+        b.m.state==='pass'
+          ? 'Equal to the entity ID in this metadata. The service provider will accept the audience.'
+          : `Not equal to this entity ID (<code>${esc(md.entityId)}</code>); it ${esc(b.m.why)}. The service provider rejects the assertion before looking at anything else. Fix the identifier in Entra so it matches the metadata exactly.`);
+    }
+    const dest=seen.saml.destination;
+    if(dest&&md.acs.length){
+      const b=bestMatch(dest,md.acs.map(a=>a.location));
+      add(b.m.state,'Destination in the assertion',`<code>${esc(dest)}</code>`,
+        b.m.state==='pass'
+          ? 'Equal to an assertion consumer service URL in this metadata.'
+          : `No assertion consumer service URL here matches. Closest is <code>${esc(b.cand)}</code>, which ${esc(b.m.why)}. This is what AADSTS50011 reports.`);
+    }
+    const rcp=seen.saml.recipient;
+    if(rcp&&md.acs.length){
+      const b=bestMatch(rcp,md.acs.map(a=>a.location));
+      add(b.m.state,'Recipient in the assertion',`<code>${esc(rcp)}</code>`,
+        b.m.state==='pass'?'Equal to an assertion consumer service URL in this metadata.'
+          :`Closest here is <code>${esc(b.cand)}</code>, which ${esc(b.m.why)}. Service providers that check <code>Recipient</code> reject this even when the POST reached the right endpoint.`);
+    }
+    const fmt=seen.saml.nameIdFormat;
+    if(fmt&&md.nameIdFormats.length){
+      const ok=md.nameIdFormats.includes(fmt);
+      add(ok?'pass':'warn','NameID format',`<code>${esc(fmt.split(':').pop())}</code>`,
+        ok?'Declared as supported in this metadata.'
+          :`This metadata declares only ${md.nameIdFormats.map(f=>`<code>${esc(f.split(':').pop())}</code>`).join(', ')}. Some providers ignore the declaration and some refuse outright, so treat it as suspect rather than proven broken. See ${msDoc('claims','customising SAML claims')}.`);
+    }
+  }
+
+  if(seen.entra){
+    if(md.entityId&&seen.entra.entityIds.length){
+      const b=bestMatch(md.entityId,seen.entra.entityIds);
+      add(b.m.state,'Entity ID registered in Entra',`<code>${esc(b.cand)}</code>`,
+        b.m.state==='pass'?'Equal to the entity ID in this metadata.'
+          :`Not equal to this entity ID (<code>${esc(md.entityId)}</code>); it ${esc(b.m.why)}. Correct the identifier on the enterprise application.`);
+    }
+    if(md.acs.length&&seen.entra.replyUrls.length){
+      const def=(md.acs.find(a=>a.isDefault)||md.acs[0]).location;
+      const b=bestMatch(def,seen.entra.replyUrls);
+      add(b.m.state,'Reply URL registered in Entra',`<code>${esc(b.cand)}</code>`,
+        b.m.state==='pass'?`Equal to the assertion consumer service URL <code>${esc(def)}</code>.`
+          :`The service provider consumes assertions at <code>${esc(def)}</code>. The closest registered reply URL ${esc(b.m.why)}. Until these agree every sign-in ends in AADSTS50011. See ${msDoc('redirect','how reply URLs are matched')}.`);
+    }
+    const encKey=md.keys.some(k=>k.use.includes('encryption'));
+    if(encKey||seen.entra.encrypted){
+      const ok=encKey&&seen.entra.encrypted;
+      add(ok?'pass':'warn','Token encryption',
+        `metadata ${encKey?'publishes':'publishes no'} encryption key, Entra ${seen.entra.encrypted?'encrypts':'does not encrypt'}`,
+        ok?'Both sides agree, so assertions are encrypted and cannot be read from a browser capture.'
+          :encKey?`The service provider publishes an encryption key but Entra is not encrypting. That is legal and common — the key is an offer, not a demand — so only act on this if the provider says it requires encryption. See ${msDoc('encryption','SAML token encryption')}.`
+                 :`Entra is encrypting assertions but this metadata publishes no encryption key. Confirm the certificate was uploaded to Entra by hand and has not expired, because nothing in the metadata is keeping the two in step. See ${msDoc('encryption','SAML token encryption')}.`);
+    }
+  }
+  return {rows,worst};
+}
+
+async function inspectSpMetadata(){
+  if(oversize('spIn','spOut','metadata document')) return;
+  const out=$('spOut'); let md;
+  try{ md=parseSpMetadata($('spIn').value); }
+  catch(e){ out.innerHTML=card('Could not read the metadata',findRow('fail','Metadata',e.message)); return; }
+  const states={}; let html='',rows='';
+
+  rows=findRow(md.entityId?'pass':'fail','Entity ID',md.entityId?`<code>${esc(md.entityId)}</code>`:'missing',
+    md.entityId?'This is the exact string the assertion <code>&lt;Audience&gt;</code> has to carry, and the value that goes in the Identifier field on the Entra application.'
+      :'Without an <code>entityID</code> there is nothing for the audience to match, and the document is not valid metadata.');
+  states.ent=md.entityId?'pass':'fail';
+  if(md.role==='idp')
+    rows+=findRow('warn','Document role','identity provider metadata',
+      'This describes an <b>identity provider</b>, not a service provider — if you exported it from Entra, it is the wrong half. The entity ID below is the assertion <code>Issuer</code>, and the certificate is the one that signs assertions. Useful, but it will not tell you what the service provider expects.');
+  else if(md.both)
+    rows+=findRow('info','Document role','both roles in one entity','This entity describes both roles. Only the service provider half is read here.');
+  if(md.validUntil){
+    const d=daysLeft(md.validUntil), st=d<0?'fail':d<14?'warn':'pass';
+    rows+=findRow(st,'Metadata expires',`<code>${esc(md.validUntil.toISOString().slice(0,10))}</code>`,
+      d<0?`Expired ${Math.round(-d)} days ago. Providers that honour <code>validUntil</code> stop trusting it, and re-fetching stale metadata fixes nothing. Ask for a current document.`
+        :d<14?`${Math.round(d)} days left. Fetch a fresh copy before it lapses.`
+        :`${Math.round(d)} days remaining.`);
+  }
+  if(md.org) rows+=findRow('info','Organisation',`<code>${esc(md.org)}</code>`);
+  if(md.contacts.length) rows+=findRow('info','Contacts',md.contacts.map(c=>`<code>${esc(c)}</code>`).join('<br>'),
+    'Who to raise a certificate rollover with before it expires, rather than after.');
+  html+=card('Entity',rows);
+
+  rows='';
+  const endpoints=md.role==='sp'?md.acs:md.sso;
+  const epLabel=md.role==='sp'?'Assertion consumer service':'Single sign-on service';
+  states.acs=endpoints.length?'pass':'fail';
+  if(!endpoints.length){
+    rows=findRow('fail',epLabel,'none declared',
+      md.role==='sp'?'A service provider with no <code>AssertionConsumerService</code> has nowhere to receive an assertion. The document is incomplete.'
+        :'No <code>SingleSignOnService</code> endpoint, so nothing can start a sign-in here.');
+  } else {
+    endpoints.forEach((a,i)=>{
+      const tags=[a.binding?`binding <code>${esc(a.binding)}</code>`:'', a.index!==''?`index <code>${esc(a.index)}</code>`:'',
+        a.isDefault?'<b>default</b>':''].filter(Boolean).join(' &middot; ');
+      rows+=findRow(i===0||a.isDefault?'pass':'info',i===0?epLabel:' ',`<code>${esc(a.location)}</code>`,tags);
+    });
+    if(md.role==='sp'){
+      const post=endpoints.some(a=>/POST/i.test(a.binding));
+      if(!post) rows+=findRow('warn','Bindings','no HTTP-POST endpoint',
+        'Entra posts SAML responses. A provider offering only Artifact or Redirect bindings needs a different integration, not a reconfigured one.');
+      rows+=findRow('info','What to register in Entra','the URL above, character for character',
+        `Reply URL matching is exact: case and trailing slash both count. See ${msDoc('redirect','how reply URLs are matched')}.`);
+    }
+  }
+  html+=card(epLabel,rows);
+
+  rows='';
+  const was=md.wantAssertionsSigned, ars=md.authnRequestsSigned;
+  rows+=findRow(was==='false'?'warn':'pass','Wants signed assertions',`<code>${esc(was==null?'not stated':was)}</code>`,
+    was==='false'?'This provider does not require a signed assertion. That is its choice to make, but it means a forged assertion is accepted, so raise it with them.'
+      :was==null?'Not stated, so the default applies and assertions should be signed. Entra signs the assertion by default.'
+      :'Entra signs the assertion by default, so this is satisfied without changing anything.');
+  if(ars!=null) rows+=findRow(ars==='true'?'info':'na','Signs its own requests',`<code>${esc(ars)}</code>`,
+    ars==='true'?'The provider signs its <code>AuthnRequest</code>. Entra only verifies these when the application has verification certificates uploaded, so this is normally an offer rather than a requirement.':'');
+  states.crt='na';
+  if(!md.keys.length){
+    rows+=findRow('info','Certificates','none published',
+      md.role==='sp'?'Normal. A service provider needs a key only to sign its requests or to receive encrypted assertions, and many do neither.':'');
+  } else {
+    let worstCert='pass';
+    for(const k of md.keys){
+      let der=null;
+      try{ der=b64bytes(k.cert); }
+      catch(e){
+        rows+=findRow('warn',`Certificate (${esc(k.use)})`,'not decodable',
+          'The <code>X509Certificate</code> element is not valid base64, which normally means a truncated copy. Every other check here is unaffected.');
+        if(WORST.indexOf('warn')>WORST.indexOf(worstCert)) worstCert='warn';
+        continue;
+      }
+      const tp=await thumbprints(der), val=certValidity(der);
+      let note=`SHA-1 <code>${esc(tp['SHA-1']||'—')}</code>`;
+      let st='info';
+      if(val){
+        const d=daysLeft(val.to);
+        st=d<0?'fail':d<30?'warn':'pass';
+        note+=` &middot; valid to <code>${esc(val.to.toISOString().slice(0,10))}</code>, `+
+          (d<0?`<b>expired ${Math.round(-d)} days ago</b>`:d<30?`<b>expires in ${Math.round(d)} days</b>`:`${Math.round(d)} days remaining`);
+        if(WORST.indexOf(st)>WORST.indexOf(worstCert)) worstCert=st;
+      }
+      rows+=findRow(st,`Certificate (${esc(k.use)})`,`<code>${esc((k.cert||'').slice(0,24))}…</code>`,note);
+    }
+    states.crt=worstCert;
+    /* The single easiest wrong conclusion to draw from this tab, so it gets a
+       row of its own rather than a clause someone skims past. */
+    rows+=findRow('na','Not the assertion signing certificate','different key entirely',
+      'These belong to the service provider: the signing key verifies <em>its</em> requests, and the encryption key is the one Entra would encrypt to. The certificate that signs assertions is the tenant\'s, on the <b>Live tenant</b> and <b>SAML message</b> tabs. Comparing a thumbprint across the two is meaningless.');
+  }
+  html+=card('Signing and encryption',rows);
+
+  states.nid=md.nameIdFormats.length?'info':'na';
+  html+=card('NameID formats', md.nameIdFormats.length
+    ? md.nameIdFormats.map((f,i)=>findRow(/emailAddress/.test(f)?'pass':'info',i?' ':'Accepted',
+        `<code>${esc(f.split(':').pop())}</code>`,
+        i?'':`Entra sends <code>unspecified</code> carrying the UPN unless the claim is changed. A provider wanting <code>emailAddress</code> usually needs the source changed to <code>user.mail</code> as well. See ${msDoc('claims','customising SAML claims')}.`)).join('')
+    : findRow('na','Accepted','none declared','The provider states no preference, so whatever Entra sends is acceptable to it.'));
+
+  if(md.slo.length)
+    html+=card('Single logout', md.slo.map((s,i)=>findRow('info',i?' ':'Endpoint',
+      `<code>${esc(s.location)}</code>`,s.binding?`binding <code>${esc(s.binding)}</code>`:'')).join('')+
+      findRow('na','Entra support','not configured from metadata',
+        'Entra has its own logout URL field on the application. Importing metadata does not populate it, so set it by hand if single logout matters.'));
+
+  const xr=crossCheckRows(md);
+  states.xref=xr.worst;
+  html+=card('Cross-check', xr.rows ||
+    '<p class="empty">Nothing loaded to compare against yet. Inspect an assertion on the <b>SAML message</b> tab, or run checks on the <b>Live tenant</b> tab, then come back — the comparison appears here.</p>');
+
+  seen.sp=md;
+  const segs=[{tag:'ent',state:states.ent||'na'},{tag:'acs',state:states.acs||'na'},
+    {tag:'crt',state:states.crt||'na'},{tag:'nid',state:states.nid||'na'},{tag:'xref',state:states.xref||'na'}];
+  const worst=roll(segs.map(s=>s.state));
+  const label={fail:'One or more checks failed. Work left to right.',
+    warn:'Nothing fatal, but read the flagged rows.',
+    pass:'The two sides agree on everything checked here.',
+    info:'Read. Load the other side to compare against it.',
+    na:'Read. Load the other side to compare against it.'}[worst];
+  out.innerHTML=strip(segs,label)+html; animateStrip();
+}
+$('spGo').addEventListener('click',()=>{
+  inspectSpMetadata().catch(e=>{
+    $('spOut').innerHTML=card('Could not finish reading the metadata',
+      findRow('fail','Inspector',esc(`${e&&e.name||'Error'}: ${e&&e.message||e}`),
+        'This is a fault in the page, not a verdict on the metadata. Re-copy the whole document and try again.'));
+  });
+});
+$('spClear').addEventListener('click',()=>{$('spIn').value='';$('spOut').innerHTML='';seen.sp=null;});
 
 /* ================= JWT ================= */
 const GRAPH=['00000003-0000-0000-c000-000000000000','https://graph.microsoft.com'];

@@ -60,7 +60,7 @@ const samples = [
   ['13-access-token-scopes', 'An access token with scp and appid rather than id_token claims.',
     t({}, { aud: 'api://some-resource', scp: 'User.Read Files.Read', appid: CLIENT })],
   ['14-app-roles', 'roles claim present, the app-role authorisation case.',
-    t({}, { roles: ['District.Admin', 'Reports.Read'] })],
+    t({}, { roles: ['Tenant.Admin', 'Reports.Read'] })],
   ['15-hs256', 'A symmetric algorithm, which Entra never issues. alg amber.', t({ alg: 'HS256' })],
   ['16-two-segments', 'Malformed: only two segments. Should refuse cleanly.', 'header.body'],
   ['17-bearer-prefix', 'A Bearer prefix pasted along with the token. Should be tolerated.', 'Bearer ' + t()],
