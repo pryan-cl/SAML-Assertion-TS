@@ -672,6 +672,75 @@ async function selfTest(){
   await t('the assignment note warns against trusting a per-user view', ()=>
     has($('p-notes').innerText,/per-user view/i));
 
+  /* ---- two hour session cap ----
+     Enforced whether the token needs renewing or not, because MSAL will happily
+     renew against the Microsoft sign-in cookie for as long as the tab lives.
+     Driven by moving the recorded start rather than waiting. */
+  const withSession=async (startedMsAgo, fn)=>{
+    const realAccount=account, realStart=sessionStorage.getItem(SESSION_KEY);
+    try{
+      account={username:'test@example.invalid',tenantId:'t'};
+      if(startedMsAgo===null) sessionStorage.removeItem(SESSION_KEY);
+      else sessionStorage.setItem(SESSION_KEY,String(Date.now()-startedMsAgo));
+      return await fn();
+    } finally {
+      account=realAccount;
+      if(realStart===null) sessionStorage.removeItem(SESSION_KEY);
+      else sessionStorage.setItem(SESSION_KEY,realStart);
+    }
+  };
+
+  await t('the cap is two hours', ()=>eq(SESSION_MAX_MS,2*60*60*1000));
+  await t('a fresh session is not expired', ()=>withSession(60*1000,()=>eq(sessionExpired(),false)));
+  await t('a session just under the cap is not expired', ()=>
+    withSession(SESSION_MAX_MS-60*1000,()=>eq(sessionExpired(),false)));
+  await t('a session past the cap is expired', ()=>
+    withSession(SESSION_MAX_MS+1000,()=>eq(sessionExpired(),true)));
+  /* Reloading would reset an in-memory clock, so the start lives in
+     sessionStorage and a missing one counts as expired rather than as new. */
+  await t('an account with no recorded start counts as expired', ()=>
+    withSession(null,()=>eq(sessionExpired(),true)));
+  await t('signed out means never expired, whatever the clock says', ()=>{
+    const real=account; account=null;
+    const r=sessionExpired(); account=real;
+    return eq(r,false);
+  });
+  await t('token() refuses past the cap instead of renewing', async ()=>
+    withSession(SESSION_MAX_MS+1000, async ()=>{
+      let threw=null;
+      try{ await token(); }catch(e){ threw=e; }
+      if(!threw) return 'handed out a token past the cap';
+      if(!threw.capped) return `threw the wrong error: ${threw.message}`;
+      return has(threw.message,/two hour limit/);
+    }));
+  await t('the cap teardown clears the account and the recorded start', ()=>
+    withSession(SESSION_MAX_MS+1000,()=>{
+      endSessionForCap();
+      if(account) return 'left an account signed in';
+      if(sessionStorage.getItem(SESSION_KEY)) return 'left the clock in place';
+      return has($('liveOut').innerHTML,/two hour limit/);
+    }));
+  await t('the cap teardown clears directory data from the page', ()=>
+    withSession(SESSION_MAX_MS+1000,()=>{
+      $('qApp').value='SomeApp'; $('qUser').value='someone@example.invalid';
+      endSessionForCap();
+      const left=$('qApp').value+$('qUser').value;
+      $('liveOut').innerHTML='';
+      return left===''?true:`left query fields populated: ${left}`;
+    }));
+  await t('re-signing in after the cap asks for credentials', ()=>{
+    /* prompt 'select_account' would be satisfied by the existing Microsoft
+       session and bounce straight back in, which is not a reauthentication. */
+    const src=Array.from(document.querySelectorAll('script')).map(s=>s.textContent).join('\n');
+    return has(src,/forceReauth\?'login':'select_account'/);
+  });
+  await t('the session panel says the session ends', ()=>{
+    const real=account; account={username:'x@y.z',tenantId:'t'};
+    paintSession(); const h=$('who').innerHTML;
+    account=real; paintSession();
+    return has(h,/ends after two hours/);
+  });
+
   /* ---- Graph field selection ----
      There used to be five separate lists of what to select: two Setup
      snippets, the Build a query buttons, the live route, and whatever the
@@ -740,8 +809,16 @@ async function selfTest(){
     not($('p-setup').innerText,/cannot outlive/i));
   await t('Setup states the real guarantee, that nothing resumes the session', ()=>
     has($('p-setup').innerText,/resume a session later/i));
-  await t('Setup admits the session outlives an hour inside an open tab', ()=>
-    has($('p-setup').innerText,/outlive the first hour/i));
+  /* This assertion used to require the tab to say the session outlives an hour,
+     which was the correction before the cap existed. With a cap the accurate
+     statement is the bound, so the test moved with the truth rather than the
+     wording being bent to keep an old test green. */
+  await t('Setup states the two hour cap', ()=>
+    has($('p-setup').innerText,/capped at two hours/i));
+  await t('Setup says the cap applies whether the token works or not', ()=>
+    has($('p-setup').innerText,/whether the token still works or not/i));
+  await t('Setup says reads are cleared at the cap', ()=>
+    has($('p-setup').innerText,/cleared from the page/i));
   /* The claim is only true while offline_access stays out of SCOPES. */
   await t('the no-refresh-token claim still matches the code', ()=>
     not(SCOPES.join(' '),/offline_access/));

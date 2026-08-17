@@ -311,7 +311,7 @@ pre.snip b{color:var(--info);font-weight:400}
   <div class="io">
     <div class="io-head">
       <span class="io-label">Tenant session</span>
-      <span class="io-hint" id="modeHint">Read-only, delegated, expires with this tab</span>
+      <span class="io-hint" id="modeHint">Read-only, delegated, expires with this tab or after two hours</span>
     </div>
     <div class="io-row">
       <label><span>Application (client) ID</span>
@@ -547,7 +547,8 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
     <h3>What this page does with the token</h3>
     <ul>
       <li>MSAL cache is <code>sessionStorage</code>, so closing the tab discards it. No tokens in <code>localStorage</code>, which holds only the client and tenant IDs described above.</li>
-      <li>No refresh token is requested or stored, so nothing here can resume a session later. Inside an open tab MSAL renews silently against your existing Microsoft sign-in, so the session does outlive the first hour; what it cannot do is survive the tab closing.</li>
+      <li>No refresh token is requested or stored, so nothing here can resume a session later. Inside an open tab MSAL would otherwise renew silently against your existing Microsoft sign-in for as long as the tab stayed open.</li>
+      <li><b>A signed-in session is capped at two hours</b>, applied whether the token still works or not. At the cap the session ends, anything read is cleared from the page, and signing in again asks for credentials rather than passing you straight through. A tab left open cannot hold a live read on a district's directory indefinitely.</li>
       <li>Every call is a GET. There is no write path anywhere in this file.</li>
       <li><b>End session</b> clears the cache and signs out.</li>
     </ul>
@@ -830,7 +831,7 @@ async function buildAuth(){
     $('who').textContent='The MSAL library did not load. Check the script tag or your network.';
     return;
   }
-  $('modeHint').textContent='Read-only, delegated, expires with this tab';
+  $('modeHint').textContent='Read-only, delegated, expires with this tab or after two hours';
   /* A rejection from initialize() or handleRedirectPromise() used to escape as
      an unhandled rejection, skipping paintSession(). The button stayed live
      against a half-built instance and the panel still read "Not signed in". */
@@ -845,7 +846,7 @@ async function buildAuth(){
     });
     await msalApp.initialize();
     const r = await msalApp.handleRedirectPromise();
-    if(r&&r.account) account=r.account;
+    if(r&&r.account){ account=r.account; markSessionStart(); }
     else { const a=msalApp.getAllAccounts(); if(a.length) account=a[0]; }
   }catch(e){
     msalApp=null; account=null;
@@ -855,8 +856,64 @@ async function buildAuth(){
     setPill(false,'Sign-in unavailable');
     return;
   }
+  /* A session restored from the MSAL cache across a reload keeps its original
+     clock. If there is no clock, it does not get the benefit of the doubt. */
+  if(account&&sessionExpired()){ endSessionForCap(); return; }
+  scheduleCap();
   paintSession();
 }
+/* A hard two hour cap on a signed-in session, enforced whether the token needs
+   renewing or not. Without it a session lasts as long as the tab: MSAL renews
+   silently against the Microsoft sign-in cookie, so a forgotten tab keeps a live
+   read on a district's directory indefinitely.
+
+   Three things make this actually hold:
+   1. The start time lives in sessionStorage, not a variable, so reloading the
+      page cannot reset the clock while MSAL restores the account from its cache.
+      An account with no recorded start is treated as expired rather than trusted.
+   2. The timer is the courtesy, not the control. Background tabs throttle
+      timers, so token() also checks on every use and refuses to hand one out.
+   3. Re-signing in uses prompt 'login'. Anything weaker is satisfied by the
+      existing Microsoft session and would bounce straight back in without
+      anyone proving anything, which is not a reauthentication. */
+const SESSION_MAX_MS=2*60*60*1000;
+const SESSION_KEY='fedbench.sessionStart';
+let capTimer=null, forceReauth=false;
+
+const sessionStart=()=>{ const v=+sessionStorage.getItem(SESSION_KEY); return v>0?v:0; };
+function markSessionStart(){
+  try{ sessionStorage.setItem(SESSION_KEY,String(Date.now())); }catch(e){}
+}
+/* No recorded start with an account present means the clock is unknown, and an
+   unknown clock has to count as expired. Otherwise clearing one key would buy
+   an unlimited session. */
+function sessionExpired(){
+  if(!account) return false;
+  const s=sessionStart();
+  return !s || (Date.now()-s)>=SESSION_MAX_MS;
+}
+function scheduleCap(){
+  if(capTimer) clearTimeout(capTimer);
+  if(!account) return;
+  const left=Math.max(0, SESSION_MAX_MS-(Date.now()-sessionStart()));
+  capTimer=setTimeout(()=>{ if(sessionExpired()) endSessionForCap(); }, left+1000);
+}
+/* Same teardown as End session, but says why and leaves the reason on screen. */
+function endSessionForCap(){
+  const a=account;
+  account=null; forceReauth=true;
+  try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){}
+  clearPasted();
+  $('qApp').value=''; $('qUser').value='';
+  lastRun=null; $('refreshLogs').disabled=true;
+  paintSession();
+  $('liveOut').innerHTML=card('Session ended at the two hour limit',
+    findRow('warn','Reauthentication required',
+      'This session reached its two hour cap and was ended.',
+      'The cap applies whether the token still worked or not, so that a tab left open cannot hold a live read on a district\'s directory. Anything already read has been cleared from the page. Sign in again to continue; you will be asked for credentials rather than passed straight through.'));
+  try{ if(msalApp&&a) msalApp.logoutPopup({account:a}); }catch(e){}
+}
+
 function setPill(live, label){
   const p=$('sessionPill');
   p.classList.toggle('live',!!live);
@@ -873,14 +930,18 @@ function paintSession(){
   if(!on && !$('cfgClient').value.trim()) { setPill(false,'Not configured'); return; }
   setPill(on, on?account.username:'Not signed in');
   $('who').innerHTML = on
-    ? `Signed in as <b>${esc(account.username)}</b> &middot; tenant <b>${esc(account.tenantId||'')}</b> &middot; read-only, no refresh token`
+    ? `Signed in as <b>${esc(account.username)}</b> &middot; tenant <b>${esc(account.tenantId||'')}</b> &middot; read-only, no refresh token &middot; ends after two hours`
     : NOT_SIGNED;
 }
 $('signIn').addEventListener('click', async ()=>{
   if(!msalApp){ $('who').textContent='Sign-in is not available. Re-check the client ID, or use pasted output.'; return; }
   try{
-    const r = await msalApp.loginPopup({scopes:SCOPES, prompt:'select_account'});
-    account=r.account; paintSession();
+    /* After the cap, 'login' forces credentials to be entered again. Before it,
+       'select_account' is the friendlier first sign-in. */
+    const r = await msalApp.loginPopup({scopes:SCOPES, prompt:forceReauth?'login':'select_account'});
+    account=r.account; forceReauth=false;
+    markSessionStart(); scheduleCap();
+    paintSession();
   }catch(e){
     $('liveOut').innerHTML = card('Sign-in failed', findRow('fail','MSAL', esc(e.message),
       /9002326/.test(e.message)
@@ -889,7 +950,9 @@ $('signIn').addEventListener('click', async ()=>{
   }
 });
 $('signOut').addEventListener('click', async ()=>{
-  const a=account; account=null; paintSession();
+  const a=account; account=null;
+  if(capTimer) clearTimeout(capTimer);
+  paintSession();
   /* "End session" implies the district's data is gone, so clear what holds it:
      the pasted payload, the in-memory service principal, and the query fields,
      which include a user principal name. The SAML and JWT tabs are independent
@@ -903,6 +966,13 @@ $('signOut').addEventListener('click', async ()=>{
   try{ sessionStorage.clear(); if(msalApp) await msalApp.logoutPopup({account:a}); }catch(e){}
 });
 async function token(){
+  /* The real enforcement point. A throttled timer can fire late, so nothing gets
+     a token past the cap regardless of when the timer runs. */
+  if(sessionExpired()){
+    endSessionForCap();
+    const e=new Error('Session reached its two hour limit. Sign in again to continue.');
+    e.capped=true; throw e;
+  }
   try{ return (await msalApp.acquireTokenSilent({scopes:SCOPES, account})).accessToken; }
   catch(e){ return (await msalApp.acquireTokenPopup({scopes:SCOPES})).accessToken; }
 }
