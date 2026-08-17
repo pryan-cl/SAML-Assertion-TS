@@ -1214,6 +1214,24 @@ async function selfTest(){
     seen.sp=parseSpMetadata(spMeta({acs:'https://sp.example/saml/consume'}));
     return has(await inspect(btoa('x')),/No assertion consumer service URL/);
   });
+  /* Assertion first, metadata second is the order people actually work in, and
+     the order the sample files recommend. Loading metadata has to upgrade the
+     rows already on screen, or they sit there asking for what was just supplied. */
+  await t('loading metadata upgrades the assertion already on screen', async ()=>{
+    seen.saml=null; seen.sp=null; seen.entra=null;
+    $('samlIn').value=samlFixture(btoa('x')); $('samlOut').innerHTML='';
+    await inspectSaml();
+    if(!/tab and this row compares/.test($('samlOut').innerHTML)) return 'audience row did not start out asking for metadata';
+    $('spIn').value=spMeta({entityId:'https://sp.example/'});
+    await inspectSpMetadata();
+    return has($('samlOut').innerHTML,/differs only by a trailing slash/);
+  });
+  await t('loading metadata with no assertion on screen does not render one', async ()=>{
+    seen.saml=null; seen.sp=null; seen.entra=null;
+    $('samlIn').value=''; $('samlOut').innerHTML='';
+    $('spIn').value=spMeta(); await inspectSpMetadata();
+    return eq($('samlOut').innerHTML,'');
+  });
   await t('inspecting an assertion records it for the other tab', async ()=>{
     seen.saml=null; seen.sp=null;
     await inspect(btoa('x'));

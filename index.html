@@ -1769,13 +1769,18 @@ async function inspectSaml(){
 /* Backstop. inspectSaml is long and async, so anything it throws would
    otherwise surface as an unhandled rejection with the previous assertion's
    verdict still on screen, which reads as a current result. */
-$('samlGo').addEventListener('click',()=>{
-  inspectSaml().catch(e=>{
+/* Named, because the SP metadata tab re-runs the analysis too and both routes
+   need the same backstop. inspectSaml is long and async, so anything it throws
+   would otherwise surface as an unhandled rejection with the previous
+   assertion's verdict still on screen, which reads as a current result. */
+function runSaml(){
+  return inspectSaml().catch(e=>{
     $('samlOut').innerHTML=card('Could not finish inspecting',
       findRow('fail','Inspector',esc(`${e&&e.name||'Error'}: ${e&&e.message||e}`),
         'This is a fault in the page, not a verdict on the assertion. The most common cause is a truncated paste. Re-copy the full value and try again.'));
   });
-});
+}
+$('samlGo').addEventListener('click',runSaml);
 $('samlClear').addEventListener('click',()=>{$('samlIn').value='';$('samlOut').innerHTML='';seen.saml=null;});
 $('samlXml').addEventListener('click',()=>{
   if(oversize('samlIn','samlOut','SAML message')) return;
@@ -2082,6 +2087,12 @@ async function inspectSpMetadata(){
     info:'Read. Load the other side to compare against it.',
     na:'Read. Load the other side to compare against it.'}[worst];
   out.innerHTML=strip(segs,label)+html; animateStrip();
+  /* The SAML tab's Audience and Destination rows grade themselves against
+     loaded metadata, but the natural order is assertion first and metadata
+     second. Without this those rows sat there telling the reader to load the
+     metadata they had just loaded, and the upgrade only appeared if they
+     happened to press Inspect assertion a second time. */
+  if($('samlIn').value.trim() && $('samlOut').innerHTML) await runSaml();
 }
 $('spGo').addEventListener('click',()=>{
   inspectSpMetadata().catch(e=>{
