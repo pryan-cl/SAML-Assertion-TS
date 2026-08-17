@@ -1615,7 +1615,7 @@ async function inspectSaml(){
   /* Captured for the SP metadata tab to compare against. Assigned to seen.saml
      only once the analysis completes, so a mid-way throw cannot leave half of
      one assertion sitting next to half of the last. */
-  const cap={audiences:[],destination:'',recipient:'',nameIdFormat:'',issuer:''};
+  const cap={audiences:[],destination:'',recipient:'',nameIdFormat:'',issuer:'',certThumbprint:''};
   let html='',rows='';
   rows+=findRow('info','Message type',`<code>${esc(kind)}</code>`,'Encoded as '+esc(how));
   const dest=root.getAttribute('Destination'); cap.destination=dest||'';
@@ -1739,6 +1739,7 @@ async function inspectSaml(){
     }
     if(der){
       const tp=await thumbprints(der), val=certValidity(der);
+      cap.certThumbprint=tp['SHA-1']||'';
       rows+=findRow('info','Cert SHA-1 thumbprint',`<code>${esc(tp['SHA-1']||'—')}</code>`,
         'This is what most SPs pin. Compare it against the tenant\'s active signing thumbprint on the Live tenant tab.');
       if(tp['SHA-256']) rows+=findRow('info','Cert SHA-256',`<code>${esc(tp['SHA-256'])}</code>`);
@@ -1918,6 +1919,28 @@ function crossCheckRows(md){
   const bump=s=>{ if(WORST.indexOf(s)>WORST.indexOf(worst)) worst=s; };
   const add=(st,k,v,n)=>{ bump(st); rows+=findRow(st,k,v,n); };
 
+  /* An identity provider document compares against completely different things:
+     its entity ID is the assertion's Issuer, and its signing certificate is the
+     one assertions are signed with. Treating it like a service provider document
+     produced an empty card and a disclaimer that was exactly backwards. */
+  if(md.role==='idp'){
+    if(seen.saml&&seen.saml.issuer&&md.entityId){
+      const ok=seen.saml.issuer===md.entityId;
+      add(ok?'pass':'fail','Issuer of the assertion',`<code>${esc(seen.saml.issuer)}</code>`,
+        ok?'Equal to the entity ID in this metadata, so the assertion came from this identity provider.'
+          :`Not equal to this entity ID (<code>${esc(md.entityId)}</code>). The assertion was issued by something else, so either this is the wrong metadata document or the service provider is federated with a different identity provider than you think.`);
+    }
+    const sha1=seen.saml&&seen.saml.certThumbprint;
+    const signing=(md.thumbs||[]).filter(t=>t.use.includes('signing')&&t.sha1);
+    if(sha1&&signing.length){
+      const ok=signing.some(t=>t.sha1===sha1);
+      add(ok?'pass':'fail','Certificate that signed the assertion',`<code>${esc(sha1)}</code>`,
+        ok?'Matches a signing certificate published in this metadata. The key is current.'
+          :`No signing certificate here has this thumbprint. Published: ${signing.map(t=>`<code>${esc(t.sha1)}</code>`).join(', ')}. Either the identity provider has rolled its key and this metadata is stale, or the assertion was signed by something else. Note this is a thumbprint comparison, not a cryptographic verification.`);
+    }
+    return {rows,worst};
+  }
+
   if(seen.saml){
     const auds=seen.saml.audiences||[];
     if(auds.length&&md.entityId){
@@ -2069,6 +2092,7 @@ async function inspectSpMetadata(){
   if(ars!=null) rows+=findRow(ars==='true'?'info':'na','Signs its own requests',`<code>${esc(ars)}</code>`,
     ars==='true'?'The provider signs its <code>AuthnRequest</code>. Entra only verifies these when the application has verification certificates uploaded, so this is normally an offer rather than a requirement.':'');
   states.crt='na';
+  const thumbs=[];
   if(!md.keys.length){
     rows+=findRow('info','Certificates','none published',
       md.role==='sp'?'Normal. A service provider needs a key only to sign its requests or to receive encrypted assertions, and many do neither.':'');
@@ -2084,6 +2108,7 @@ async function inspectSpMetadata(){
         continue;
       }
       const tp=await thumbprints(der), val=certValidity(der);
+      thumbs.push({use:k.use, sha1:tp['SHA-1']||''});
       let note=`SHA-1 <code>${esc(tp['SHA-1']||'—')}</code>`;
       let st='info';
       if(val){
@@ -2096,11 +2121,19 @@ async function inspectSpMetadata(){
       rows+=findRow(st,`Certificate (${esc(k.use)})`,`<code>${esc((k.cert||'').slice(0,24))}…</code>`,note);
     }
     states.crt=worstCert;
-    /* The single easiest wrong conclusion to draw from this tab, so it gets a
-       row of its own rather than a clause someone skims past. */
-    rows+=findRow('na','Not the assertion signing certificate','different key entirely',
-      'These belong to the service provider: the signing key verifies <em>its</em> requests, and the encryption key is the one Entra would encrypt to. The certificate that signs assertions is the tenant\'s, on the <b>Live tenant</b> and <b>SAML message</b> tabs. Comparing a thumbprint across the two is meaningless.');
+    /* Which certificate this is depends entirely on the document's role, and
+       getting it backwards is the single easiest wrong conclusion to draw here,
+       so it gets a row of its own rather than a clause someone skims past.
+       On an SP document these keys are the provider's own and comparing them to
+       the assertion's is meaningless; on an IdP document the signing key is
+       exactly the one that signs assertions and the comparison is the point. */
+    rows+= md.role==='sp'
+      ? findRow('na','Not the assertion signing certificate','a different key entirely',
+          'These belong to the service provider: the signing key verifies <em>its</em> requests, and the encryption key is the one Entra would encrypt to. The certificate that signs assertions is the tenant\'s, on the <b>Live tenant</b> and <b>SAML message</b> tabs. Comparing a thumbprint across the two is meaningless.')
+      : findRow('info','This is the assertion signing key','compare it, do not ignore it',
+          `On an identity provider document the signing certificate is the one assertions are signed with. Compare the thumbprint above against the certificate embedded in an assertion on the <b>SAML message</b> tab, and against the tenant's active signing thumbprint on <b>Live tenant</b>. See ${msDoc('cert','managing SAML signing certificates')}.`);
   }
+  md.thumbs=thumbs;
   html+=card('Signing and encryption',rows);
 
   states.nid=md.nameIdFormats.length?'info':'na';
@@ -2125,9 +2158,14 @@ async function inspectSpMetadata(){
   const segs=[{tag:'ent',state:states.ent||'na'},{tag:'acs',state:states.acs||'na'},
     {tag:'crt',state:states.crt||'na'},{tag:'nid',state:states.nid||'na'},{tag:'xref',state:states.xref||'na'}];
   const worst=roll(segs.map(s=>s.state));
+  /* "The two sides agree" fired whenever this side was clean, including when
+     nothing had been loaded to compare against and xref was na. That claims a
+     comparison happened. It has to depend on one actually having run. */
+  const compared=states.xref&&states.xref!=='na';
   const label={fail:'One or more checks failed. Work left to right.',
     warn:'Nothing fatal, but read the flagged rows.',
-    pass:'The two sides agree on everything checked here.',
+    pass: compared ? 'The two sides agree on everything checked here.'
+                   : 'Nothing wrong on this side. Nothing loaded yet to compare it against.',
     info:'Read. Load the other side to compare against it.',
     na:'Read. Load the other side to compare against it.'}[worst];
   out.innerHTML=strip(segs,label)+html; animateStrip();

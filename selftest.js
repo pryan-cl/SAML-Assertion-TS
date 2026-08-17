@@ -1205,6 +1205,50 @@ async function selfTest(){
   await t('metadata with a validUntil still reports it', async ()=>
     has(await spInspect(spMeta({validUntil:'2030-01-01T00:00:00Z'})),/Metadata expires/));
   await t('an IdP document warns it is the wrong half', async ()=>has(await spInspect(spMeta({role:'IDPSSODescriptor'})),/wrong half/));
+
+  /* Found against a real published document. "The two sides agree" fired with
+     nothing loaded to compare against, and the certificate disclaimer was
+     exactly inverted for an identity provider. */
+  await t('a clean side with nothing to compare does not claim the sides agree', async ()=>{
+    seen.saml=null; seen.entra=null; seen.sp=null;
+    const h=await spInspect(spMeta({cert:btoa('x')}));
+    return not(h,/two sides agree/);
+  });
+  await t('a clean side with nothing loaded says so instead', async ()=>{
+    seen.saml=null; seen.entra=null; seen.sp=null;
+    return has(await spInspect(spMeta({cert:btoa('x')})),/Nothing loaded yet to compare it against/);
+  });
+  await t('an SP certificate is called not-the-assertion-key', async ()=>
+    has(await spInspect(spMeta({cert:btoa('x'),use:'signing'})),/Comparing a thumbprint across the two is meaningless/));
+  await t('an IdP certificate is called the assertion signing key, the opposite', async ()=>{
+    const h=await spInspect(spMeta({role:'IDPSSODescriptor',cert:btoa('x'),use:'signing'}));
+    if(/Comparing a thumbprint across the two is meaningless/.test(h)) return 'told the reader to ignore the key that signs assertions';
+    return has(h,/This is the assertion signing key/);
+  });
+  await t('an IdP entity ID is compared against the assertion issuer', async ()=>{
+    seen.saml={audiences:[],destination:'',recipient:'',nameIdFormat:'',issuer:'https://sp.example',certThumbprint:''};
+    return has(await spInspect(spMeta({role:'IDPSSODescriptor'})),/came from this identity provider/);
+  });
+  await t('a mismatched issuer is called out', async ()=>{
+    seen.saml={audiences:[],destination:'',recipient:'',nameIdFormat:'',issuer:'https://somewhere.else',certThumbprint:''};
+    return has(await spInspect(spMeta({role:'IDPSSODescriptor'})),/issued by something else/);
+  });
+  await t('the assertion certificate is compared to the published signing key', async ()=>{
+    const der=b64bytes(btoa('x')); const tp=await thumbprints(der);
+    seen.saml={audiences:[],destination:'',recipient:'',nameIdFormat:'',issuer:'',certThumbprint:tp['SHA-1']};
+    return has(await spInspect(spMeta({role:'IDPSSODescriptor',cert:btoa('x'),use:'signing'})),/The key is current/);
+  });
+  await t('a rolled key is reported as a thumbprint mismatch, not a verification', async ()=>{
+    seen.saml={audiences:[],destination:'',recipient:'',nameIdFormat:'',issuer:'',certThumbprint:'DE'.repeat(20)};
+    const h=await spInspect(spMeta({role:'IDPSSODescriptor',cert:btoa('x'),use:'signing'}));
+    return /rolled its key/.test(h) ? has(h,/not a cryptographic verification/) : 'did not report the mismatch';
+  });
+  await t('inspecting an assertion captures its certificate thumbprint', async ()=>{
+    seen.saml=null;
+    await inspect(btoa('x'));
+    return seen.saml && /^[0-9A-F]{40}$/.test(seen.saml.certThumbprint||'') ? true : 'thumbprint not captured';
+  });
+  seen.saml=null; seen.entra=null; seen.sp=null;
   await t('the SP certificate is not offered as comparable to the assertion signing certificate',
     async ()=>has(await spInspect(spMeta({cert:btoa('x')})),/Comparing a thumbprint across the two is meaningless/));
   await t('an undecodable certificate does not lose the rest of the document', async ()=>{
