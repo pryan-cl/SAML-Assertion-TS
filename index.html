@@ -395,13 +395,27 @@ pre.snip b{color:var(--info);font-weight:400}
   <div class="io">
     <div class="io-head">
       <span class="io-label">Service provider metadata</span>
-      <span class="io-hint">Paste the XML. This page cannot fetch it for you — see the note below</span>
+      <span class="io-hint">Paste the XML, or paste the URL and it will tell you what to do with it</span>
     </div>
-    <textarea id="spIn" spellcheck="false" placeholder="Paste the SP's SAML metadata, starting &lt;EntityDescriptor ... or &lt;md:EntityDescriptor ...&#10;&#10;Most service providers publish it at a URL. Open that URL in a tab and copy what it returns."></textarea>
+    <textarea id="spIn" spellcheck="false" placeholder="Paste the SP's SAML metadata, starting &lt;EntityDescriptor ... or &lt;md:EntityDescriptor ...&#10;&#10;Most service providers publish it at a URL. Open that URL in a tab and copy what it returns. If yours publishes no document, use the two fields below instead."></textarea>
     <div class="io-foot">
       <button class="act primary" id="spGo">Inspect metadata</button>
       <button class="act" id="spClear">Clear</button>
       <span class="who" id="spNote">Inspect an assertion on <b>SAML message</b>, or run checks on <b>Live tenant</b>, and this tab compares the two sides.</span>
+    </div>
+    <div class="io-head" style="border-top:1px solid var(--border-soft);border-bottom:0">
+      <span class="io-label">Or enter the two values by hand</span>
+      <span class="io-hint">For consoles that show the fields but publish no document</span>
+    </div>
+    <div class="io-row">
+      <label><span>Entity ID / Identifier</span>
+        <input type="text" id="spEntity" spellcheck="false" placeholder="https://sp.example.org/saml"></label>
+      <label><span>ACS URL / Reply URL</span>
+        <input type="text" id="spAcs" spellcheck="false" placeholder="https://sp.example.org/acs"></label>
+    </div>
+    <div class="io-foot" style="border-top:0">
+      <button class="act" id="spBuild">Build metadata from these</button>
+      <span class="who">Writes a minimal document into the box above, so you can see exactly what is being checked and correct it.</span>
     </div>
   </div>
   <div id="spOut"></div>
@@ -1964,9 +1978,39 @@ function crossCheckRows(md){
   return {rows,worst};
 }
 
+/* Some consoles show the identifier and the reply URL but publish no metadata
+   document at all, which is the common case rather than the exotic one. Building
+   a document from the two fields keeps a single parser and a single cross-check
+   path, and writing it into the paste box rather than analysing it invisibly
+   means the reader can see exactly what is being checked, and edit it. */
+function metadataFromFields(entityId, acs){
+  return `<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${esc(String(entityId||'').trim())}">
+  <md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="${esc(String(acs||'').trim())}" index="0" isDefault="true"/>
+  </md:SPSSODescriptor>
+</md:EntityDescriptor>`;
+}
+
 async function inspectSpMetadata(){
   if(oversize('spIn','spOut','metadata document')) return;
-  const out=$('spOut'); let md;
+  const out=$('spOut');
+  /* Pasting the URL instead of what it returns is the obvious mistake, and
+     "this does not start with <" is accurate but unhelpful when the reader is
+     holding the right thing in the wrong form. Say what to do with it, and say
+     plainly why the fetch is not offered rather than leaving it looking like an
+     oversight. */
+  const raw=$('spIn').value.trim();
+  if(/^https?:\/\/[^\s<>"']+$/i.test(raw)){
+    out.innerHTML=card('That is the URL, not the document',
+      findRow('info','Metadata URL',`<a href="${esc(raw)}" target="_blank" rel="noopener">${esc(raw)}</a>`,
+        'Open it, then copy the XML it returns into the box above. If it is behind a sign-in, open it in the browser where you already have a session.')+
+      findRow('na','Why this page will not fetch it for you','two reasons, and both would have to be solved',
+        'The service provider would have to send CORS headers naming this origin, and almost none do. This page also restricts its outbound connections to Microsoft endpoints, which is what stops a pasted assertion being sent anywhere. That guarantee is worth more than saving you a copy and paste.')+
+      findRow('info','If you have no document at all','use the two fields below',
+        'Plenty of consoles show an identifier and a reply URL without publishing metadata. Enter those and press <b>Build metadata from these</b>.'));
+    return;
+  }
+  let md;
   try{ md=parseSpMetadata($('spIn').value); }
   catch(e){ out.innerHTML=card('Could not read the metadata',findRow('fail','Metadata',e.message)); return; }
   const states={}; let html='',rows='';
@@ -2101,7 +2145,22 @@ $('spGo').addEventListener('click',()=>{
         'This is a fault in the page, not a verdict on the metadata. Re-copy the whole document and try again.'));
   });
 });
-$('spClear').addEventListener('click',()=>{$('spIn').value='';$('spOut').innerHTML='';seen.sp=null;});
+$('spBuild').addEventListener('click',()=>{
+  const e=$('spEntity').value.trim(), a=$('spAcs').value.trim();
+  if(!e&&!a){
+    $('spOut').innerHTML=card('Nothing to build from',
+      findRow('warn','Fields','both are empty',
+        'Enter the identifier and the reply URL the service provider shows you, or paste its metadata document above.'));
+    return;
+  }
+  /* One field is still worth building: the tab reports the missing half as a
+     failure, which is the right answer and more useful than refusing. */
+  $('spIn').value=metadataFromFields(e,a);
+  $('spGo').click();
+});
+$('spClear').addEventListener('click',()=>{
+  $('spIn').value=''; $('spOut').innerHTML=''; $('spEntity').value=''; $('spAcs').value=''; seen.sp=null;
+});
 
 /* ================= JWT ================= */
 const GRAPH=['00000003-0000-0000-c000-000000000000','https://graph.microsoft.com'];

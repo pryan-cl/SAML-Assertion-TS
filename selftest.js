@@ -1153,6 +1153,53 @@ async function selfTest(){
     const h=await spInspect(spMeta());
     return h==='SENTINEL' ? 'panel left stale' : has(h,/Entity ID/);
   });
+  /* Pasting the URL instead of what it returns is the obvious mistake, and the
+     answer has to be instructions, not a parse error about angle brackets. */
+  await t('a pasted URL is recognised, not parsed',   async ()=>has(await spInspect('https://sp.example.org/metadata.xml'),/That is the URL/));
+  await t('a pasted URL is offered as a link',        async ()=>has(await spInspect('https://sp.example.org/metadata.xml'),/<a href="https:\/\/sp\.example\.org\/metadata\.xml"/));
+  await t('a pasted URL explains the refusal to fetch',async ()=>has(await spInspect('https://sp.example.org/metadata.xml'),/CORS headers naming this origin/));
+  await t('a URL with XML after it is still parsed as XML',
+    async ()=>not(await spInspect(spMeta({entityId:'https://sp.example.org/x'})),/That is the URL/));
+  await t('a javascript: URL is not turned into a link',
+    async ()=>not(await spInspect('javascript:alert(1)'),/<a href="javascript/));
+
+  /* Consoles that show the fields but publish no document are the common case,
+     so the built document must go through the same parser as a pasted one. */
+  await t('fields build a document the parser accepts',
+    ()=>eq(parseSpMetadata(metadataFromFields('https://sp.example/id','https://sp.example/acs')).entityId,'https://sp.example/id'));
+  await t('the built document carries the ACS URL',
+    ()=>eq(parseSpMetadata(metadataFromFields('https://sp.example/id','https://sp.example/acs')).acs[0].location,'https://sp.example/acs'));
+  await t('the built document is POST bound',
+    ()=>eq(parseSpMetadata(metadataFromFields('a','b')).acs[0].binding,'HTTP-POST'));
+  await t('fields are escaped into the built XML, not injected', ()=>{
+    const x=metadataFromFields('https://x/"><Evil/><!--','https://y/acs');
+    if(/<Evil/.test(x)) return 'raw markup reached the document';
+    return eq(parseSpMetadata(x).entityId,'https://x/"><Evil/><!--');
+  });
+  await t('surrounding whitespace is trimmed out of the built XML',
+    ()=>eq(parseSpMetadata(metadataFromFields('  https://x/id  ','  https://x/acs  ')).entityId,'https://x/id'));
+  await t('the build button writes into the paste box and analyses it', ()=>{
+    $('spEntity').value='https://built.example/id'; $('spAcs').value='https://built.example/acs';
+    $('spBuild').click();
+    const wrote=/built\.example\/id/.test($('spIn').value);
+    return wrote ? has($('spOut').innerHTML,/built\.example\/id/) : 'did not write the document into the box';
+  });
+  await t('building with both fields empty explains itself', ()=>{
+    $('spEntity').value=''; $('spAcs').value=''; $('spIn').value=''; $('spOut').innerHTML='';
+    $('spBuild').click();
+    return has($('spOut').innerHTML,/Nothing to build from/);
+  });
+  await t('building with only an entity ID still fails the ACS row', ()=>{
+    $('spEntity').value='https://only.example/id'; $('spAcs').value='';
+    $('spBuild').click();
+    return has($('spOut').innerHTML,/none declared/);
+  });
+  await t('clearing the tab empties the two fields as well', ()=>{
+    $('spEntity').value='x'; $('spAcs').value='y';
+    $('spClear').click();
+    return eq($('spEntity').value+$('spAcs').value,'');
+  });
+
   await t('metadata with no validUntil says nothing about expiry', async ()=>
     not(await spInspect(spMeta()),/Metadata expires/));
   await t('metadata with a validUntil still reports it', async ()=>
