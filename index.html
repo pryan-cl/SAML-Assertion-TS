@@ -37,8 +37,8 @@
   /* Flat equivalents of the color-mix values, overridden in the @supports block
      below. A custom property holding an unsupported function fails at
      computed-value time rather than parse time, so var(--card) would resolve to
-     nothing and card backgrounds would go transparent. Districts run old
-     Chromebook images, so this needs a real fallback, not a wish. */
+     nothing and card backgrounds would go transparent. Managed environments run
+     old browsers, so this needs a real fallback, not a wish. */
   --card:#161d2b;
   --muted:#151a22;
   --elevated:#1e2736;
@@ -221,7 +221,7 @@ table.claims td.st-pass{color:var(--pass);font-weight:500}
 .empty{padding:16px 15px;color:var(--faint);font-size:13.5px}
 
 /* Directory identities pulled from a tenant, masked by default because these
-   sessions get screenshared with districts. A CSS toggle rather than a re-render,
+   sessions get screenshared. A CSS toggle rather than a re-render,
    so it applies instantly to output already on screen. Both forms sit in the DOM,
    so this guards against a shoulder and a screenshare, not against devtools. It
    is not a security boundary and is not claimed to be one. */
@@ -303,7 +303,7 @@ pre.snip b{color:var(--info);font-weight:400}
      on all six tabs. A warning you meet after scrolling past the paste box is a
      warning you read after doing the thing it warns about. -->
 <div class="warnbox">
-  <b>Before you paste or pull a real one.</b> Assertions and tokens are live credentials, and directory output names real staff and students. Nothing here leaves your browser, but the value still sits in your clipboard, your scrollback, and any screenshot taken on a call. Use test accounts where you can, and treat captured production output as student data.
+  <b>Before you paste or pull a real one.</b> Assertions and tokens are live credentials, and directory output names real people. Nothing here leaves your browser, but the value still sits in your clipboard, your scrollback, and any screenshot taken on a call. Use test accounts where you can, and treat captured production output as personal data.
 </div>
 
 <!-- ============ LIVE TENANT ============ -->
@@ -315,12 +315,12 @@ pre.snip b{color:var(--info);font-weight:400}
     </div>
     <div class="io-row">
       <label><span>Application (client) ID</span>
-        <input type="text" id="cfgClient" spellcheck="false" placeholder="Yours, or the district's own app registration"></label>
+        <input type="text" id="cfgClient" spellcheck="false" placeholder="Yours, or the tenant's own app registration"></label>
       <label><span>Tenant ID (blank for multi-tenant)</span>
         <input type="text" id="cfgTenant" spellcheck="false" placeholder="Required if the app is single-tenant"></label>
     </div>
     <div class="io-foot">
-      <button class="act primary" id="signIn">Sign in to district tenant</button>
+      <button class="act primary" id="signIn">Sign in to Entra tenant</button>
       <button class="act danger hidden" id="signOut">End session</button>
       <button class="act" id="cfgForget">Forget these IDs</button>
       <span class="who" id="who">Not signed in.</span>
@@ -336,7 +336,7 @@ pre.snip b{color:var(--info);font-weight:400}
       <label><span>Enterprise application</span>
         <input type="text" id="qApp" spellcheck="false" placeholder="App display name   or   8f1b…-…-…"></label>
       <label><span>Affected user (optional)</span>
-        <input type="text" id="qUser" spellcheck="false" placeholder="jdoe@district.k12.st.us"></label>
+        <input type="text" id="qUser" spellcheck="false" placeholder="jdoe@contoso.com"></label>
     </div>
     <div class="io-foot">
       <button class="act primary" id="runChecks" disabled>Run checks</button>
@@ -426,7 +426,7 @@ pre.snip b{color:var(--info);font-weight:400}
       <li><b>Audience mismatch.</b> The <code>&lt;Audience&gt;</code> must match the SP's entity ID character for character. Trailing slashes and http vs https are the usual culprits.</li>
       <li><b>Signing certificate rolled.</b> The SP is usually pinned to a thumbprint. Compare it against the tenant's active signing key. Entra's expiry notice goes to the app's notification address, which is often a person who has left. See <a data-doc="cert">managing signing certificates</a>.</li>
       <li><b>Response not signed.</b> Entra signs the assertion only by default. SPs requiring a signed response need <em>Signing Option &rarr; Sign SAML response and assertion</em>.</li>
-      <li><b>NameID is the wrong thing.</b> Default source is <code>user.userprincipalname</code>. SPs keying on email need format <code>emailAddress</code> and usually source <code>user.mail</code>. UPN and mail differ more often than people expect in districts. See <a data-doc="claims">customising claims</a>.</li>
+      <li><b>NameID is the wrong thing.</b> Default source is <code>user.userprincipalname</code>. SPs keying on email need format <code>emailAddress</code> and usually source <code>user.mail</code>. UPN and mail differ more often than people expect in practice. See <a data-doc="claims">customising claims</a>.</li>
       <li><b>Claim names don't match.</b> Entra emits schema URIs; many SPs want short names. Clear the namespace field to get a bare name. See <a data-doc="claims">customising claims</a>.</li>
       <li><b>User not assigned.</b> Assignment required plus a user outside the assigned groups is AADSTS50105, before any assertion exists. Do not trust a per-user view to tell you: someone assigned through a group, especially a nested one, can look unassigned there. Read the app's <em>Users and groups</em> list rather than the user's. See <a data-doc="assign">assigning users and groups</a>.</li>
       <li><b>Clock skew.</b> A drifted SP server rejects a good assertion as expired.</li>
@@ -457,12 +457,12 @@ pre.snip b{color:var(--info);font-weight:400}
 <section id="p-setup" role="tabpanel" aria-labelledby="tab-setup" class="hidden">
 
   <div class="warnbox stop">
-    <b>Read this before pointing a district at the Live tenant tab.</b> Asking a district administrator to consent an application into their directory is a governance decision, not a support step. It needs an app registration owned by your organisation, publisher verification so the consent screen names your company, a published privacy statement, and whatever security review your side requires. A page on a personal <code>github.io</code> subdomain asking a school district for directory read access is shaped exactly like a phishing attempt, and a competent district administrator should refuse it. Host it on a company-controlled domain, or use pasted output instead.
+    <b>Read this before pointing anyone at the Live tenant tab.</b> Asking a tenant administrator to consent an application into their directory is a governance decision, not a support step. It needs an app registration owned by your organisation, publisher verification so the consent screen names your company, a published privacy statement, and whatever security review your side requires. A page on a personal <code>github.io</code> subdomain asking an organisation for directory read access is shaped exactly like a phishing attempt, and a competent tenant administrator should refuse it. Host it on a company-controlled domain, or use pasted output instead.
   </div>
 
   <div class="card notes">
     <h2>Option A — pasted output, nothing to approve</h2>
-    <p>The district administrator runs a read-only query in a tool Microsoft already owns, then pastes the result here. No app registration, no consent, no tokens in this page. This is the version to reach for on a support call today.</p>
+    <p>The tenant administrator runs a read-only query in a tool Microsoft already owns, then pastes the result here. No app registration, no consent, no tokens in this page. This is the version to reach for on a support call today.</p>
     <p>Send them to Graph Explorer, have them sign in, consent to the individual permission it prompts for, run the query, and copy the response. Or in PowerShell:</p>
     <pre class="snip">Connect-MgGraph -Scopes <b>"Application.Read.All","User.Read.All","Directory.Read.All","AuditLog.Read.All"</b>
 
@@ -472,11 +472,11 @@ Get-MgServicePrincipal -Filter "displayName eq 'APP-NAME'" |
   ConvertTo-Json -Depth 5
 
 <b># The affected user, to compare UPN against mail</b>
-Get-MgUser -UserId "jdoe@district.k12.st.us" -Property <span data-fields="user"></span> |
+Get-MgUser -UserId "jdoe@contoso.com" -Property <span data-fields="user"></span> |
   ConvertTo-Json
 
 <b># Is the user actually assigned to the app</b>
-Get-MgUserAppRoleAssignment -UserId "jdoe@district.k12.st.us" <b>-ConsistencyLevel eventual -CountVariable c</b> |
+Get-MgUserAppRoleAssignment -UserId "jdoe@contoso.com" <b>-ConsistencyLevel eventual -CountVariable c</b> |
   ConvertTo-Json -Depth 3
 
 <b># Recent sign-ins for the app (needs Entra ID P1 or P2)</b>
@@ -498,28 +498,28 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
       <li><b>There is no broker API.</b> Graph Explorer is a client of Graph, not an identity provider, so there is nothing to delegate through.</li>
     </ul>
     <p>Setting the client ID field to Graph Explorer's application ID does not work either. Its registration does not list this page as a redirect URI, so you get AADSTS50011 straight away, and impersonating a Microsoft first-party registration is not a road worth starting down.</p>
-    <p>What the page does instead is build the query, copy it, and open Graph Explorer so the district can run it in one paste. The Share link format Graph Explorer produces is not a documented API, so the deep link is best effort; the clipboard copy is the part that reliably works. Test it once and if the prefill stops working, the query is still on the clipboard.</p>
+    <p>What the page does instead is build the query, copy it, and open Graph Explorer so they can run it in one paste. The Share link format Graph Explorer produces is not a documented API, so the deep link is best effort; the clipboard copy is the part that reliably works. Test it once and if the prefill stops working, the query is still on the clipboard.</p>
   </div>
 
   <div class="card notes">
     <h2>Permissions the live checks need</h2>
-    <p>The same set applies to <b>Option B</b> and <b>Option C</b> below, so it is listed once here rather than inside either of them. <b>Option A</b> needs none of it: the district runs the queries themselves in a tool Microsoft already owns, and consents only to what that tool asks for.</p>
+    <p>The same set applies to <b>Option B</b> and <b>Option C</b> below, so it is listed once here rather than inside either of them. <b>Option A</b> needs none of it: the tenant administrator runs the queries themselves in a tool Microsoft already owns, and consents only to what that tool asks for.</p>
     <div style="overflow-x:auto"><table class="claims">
       <thead><tr><th>Delegated scope</th><th>Status</th><th>Unlocks</th><th>Notes</th></tr></thead>
       <tbody>
         <tr><td>Application.Read.All</td><td class="short">required</td><td>SSO mode, entity IDs, reply URLs, signing certificates and expiry, assignment requirement</td><td>Admin consent. The workhorse.</td></tr>
         <tr><td>User.Read.All</td><td class="short">required</td><td>UPN versus mail, account enabled, guest status, on-prem sync state</td><td>Admin consent.</td></tr>
-        <tr><td>Directory.Read.All</td><td class="short">required</td><td>App role assignments, plus the group memberships behind them</td><td>Admin consent. Broadest of the set. Dropping it disables group-inheritance resolution, so the assignment check falls back to reporting that it cannot tell for any user assigned through a group, which is the normal case in districts.</td></tr>
-        <tr><td>AuditLog.Read.All</td><td class="short">required</td><td>Sign-in logs with failure reason and correlation ID</td><td>Admin consent. Requires Entra ID P1 or P2, so districts on A1 will get a 403 here.</td></tr>
+        <tr><td>Directory.Read.All</td><td class="short">required</td><td>App role assignments, plus the group memberships behind them</td><td>Admin consent. Broadest of the set. Dropping it disables group-inheritance resolution, so the assignment check falls back to reporting that it cannot tell for any user assigned through a group, which is the normal case.</td></tr>
+        <tr><td>AuditLog.Read.All</td><td class="short">required</td><td>Sign-in logs with failure reason and correlation ID</td><td>Admin consent. Requires Entra ID P1 or P2, so tenants on A1 will get a 403 here.</td></tr>
         <tr><td>Policy.Read.All</td><td>optional</td><td>Conditional Access policies scoped to the app</td><td>Not requested by this page. Admin consent if you add it. Report-only policy outcomes already surface in the sign-in log without it.</td></tr>
       </tbody>
     </table></div>
-    <p>The four marked required are exactly what the page asks for. Adding a scope widens what a district administrator has to approve, so treat any addition as a real cost rather than a convenience.</p>
+    <p>The four marked required are exactly what the page asks for. Adding a scope widens what a tenant administrator has to approve, so treat any addition as a real cost rather than a convenience.</p>
   </div>
 
   <div class="card notes">
-    <h2>Option B — the district registers their own app</h2>
-    <p>This is usually the easiest yes. The district creates a single-page app registration in their own tenant, pastes the client ID and their tenant ID into the fields on the Live tenant tab, and gets the full live checks without extending any trust to a vendor. Their app, their tenant, their consent, their revoke button. Nothing to security review on your side because you are not asking for anything.</p>
+    <h2>Option B — the tenant registers their own app</h2>
+    <p>This is usually the easiest yes. The tenant creates a single-page app registration in their own tenant, pastes the client ID and their tenant ID into the fields on the Live tenant tab, and gets the full live checks without extending any trust to a vendor. Their app, their tenant, their consent, their revoke button. Nothing to security review on your side because you are not asking for anything.</p>
     <ol>
       <li>Entra admin center &rarr; App registrations &rarr; New registration. Any name. Accounts in this organizational directory only.</li>
       <li>Redirect URI: platform <b>Single-page application</b>, value is the exact URL of this page. See <a data-doc="redirect">redirect URI restrictions</a> and <a data-doc="registerApp">registering an application</a>.</li>
@@ -532,7 +532,7 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
 
   <div class="card notes">
     <h2>Option C — a multi-tenant app you own, if it gets approved</h2>
-    <p>Same mechanics as Option B, except the registration lives in your tenant and every district has to consent it. That buys you a one-time setup instead of per-district setup, and costs you a security review, publisher verification, and a harder conversation. Set <code>DEFAULT_CLIENT_ID</code> in the script block to prefill it.</p>
+    <p>Same mechanics as Option B, except the registration lives in your tenant and every tenant has to consent it. That buys you a one-time setup instead of per-tenant setup, and costs you a security review, publisher verification, and a harder conversation. Set <code>DEFAULT_CLIENT_ID</code> in the script block to prefill it.</p>
     <h3>App registration</h3>
     <ol>
       <li>Register the app in <b>your own</b> tenant. Supported account types: <em>Accounts in any organizational directory</em>.</li>
@@ -541,14 +541,14 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
       <li>Add the delegated permissions marked <em>required</em> above. Do not request <code>offline_access</code>. Without it there is no refresh token, so the session dies with the tab.</li>
     </ol>
     <h3>Admin consent</h3>
-    <p>Every required scope needs an administrator. Either the district admin ticks <em>Consent on behalf of your organization</em> at first sign-in, or you send a consent link ahead of the call. See <a data-doc="adminConsent">granting tenant-wide admin consent</a>.</p>
-    <pre class="snip">https://login.microsoftonline.com/<b>{district-tenant-id}</b>/adminconsent?client_id=<b>{your-client-id}</b>&redirect_uri=<b>{this-page-url}</b></pre>
+    <p>Every required scope needs an administrator. Either the tenant administrator ticks <em>Consent on behalf of your organization</em> at first sign-in, or you send a consent link ahead of the call. See <a data-doc="adminConsent">granting tenant-wide admin consent</a>.</p>
+    <pre class="snip">https://login.microsoftonline.com/<b>{their-tenant-id}</b>/adminconsent?client_id=<b>{your-client-id}</b>&redirect_uri=<b>{this-page-url}</b></pre>
     <p>Either way, tell them plainly that consent is tenant-wide and persists until revoked, and show them where to revoke it: Entra admin center &rarr; Enterprise applications &rarr; your app &rarr; Permissions, or delete the service principal outright. Offering the revocation path unprompted is what makes the ask credible.</p>
     <h3>What this page does with the token</h3>
     <ul>
       <li>MSAL cache is <code>sessionStorage</code>, so closing the tab discards it. No tokens in <code>localStorage</code>, which holds only the client and tenant IDs described above.</li>
       <li>No refresh token is requested or stored, so nothing here can resume a session later. Inside an open tab MSAL would otherwise renew silently against your existing Microsoft sign-in for as long as the tab stayed open.</li>
-      <li><b>A signed-in session is capped at two hours</b>, applied whether the token still works or not. At the cap the session ends, anything read is cleared from the page, and signing in again asks for credentials rather than passing you straight through. A tab left open cannot hold a live read on a district's directory indefinitely.</li>
+      <li><b>A signed-in session is capped at two hours</b>, applied whether the token still works or not. At the cap the session ends, anything read is cleared from the page, and signing in again asks for credentials rather than passing you straight through. A tab left open cannot hold a live read on the tenant's directory indefinitely.</li>
       <li>Every call is a GET. There is no write path anywhere in this file.</li>
       <li><b>End session</b> clears the cache and signs out.</li>
     </ul>
@@ -569,7 +569,7 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
    CONFIGURE ME
    DEFAULT_CLIENT_ID prefills the client ID field. Leave it empty and
    whoever is using the page can supply their own app registration,
-   including the district's own. See the Setup tab.
+   including the tenant's own. See the Setup tab.
    ===================================================================== */
 const DEFAULT_CLIENT_ID = "";
 const DEFAULT_TENANT_ID = "";
@@ -622,7 +622,7 @@ const WORST = ['na','info','pass','warn','fail'];
 const roll = l => l.reduce((a,b)=> WORST.indexOf(b)>WORST.indexOf(a)?b:a,'na');
 
 /* Directory identities are masked by default, because these sessions are
-   routinely screenshared with the district whose staff and students they name.
+   routinely screenshared with the organisation whose people they name.
    The domain survives, since it is diagnostic and not personal: it tells you
    which tenant and which vanity domain you are looking at.
 
@@ -643,8 +643,8 @@ const pii = v => `<span class="pii"><i>${esc(maskId(v))}</i><b>${esc(v==null?'':
 /* Deep links into Microsoft's documentation rot, so they live here as one set
    that can be re-checked together rather than scattered through the findings.
    All verified 200 on 2026-08-14. The locale segment is deliberately omitted:
-   learn.microsoft.com redirects to the reader's own language, and a district
-   admin should not be forced into en-us.
+   learn.microsoft.com redirects to the reader's own language, and a tenant
+   administrator should not be forced into en-us.
 
    Anything with an AADSTS number keeps linking to
    login.microsoftonline.com/error?code=N instead. That is authoritative, stays
@@ -676,8 +676,8 @@ function wireDocLinks(){
     a.href=u; a.target='_blank'; a.rel='noopener';
   });
   /* The Setup snippets are static markup too, so their field lists are filled
-     from the same constants rather than typed out a second time. A district
-     admin running a snippet must collect what the analyser will read. */
+     from the same constants rather than typed out a second time. Anyone running a
+     snippet must collect what the analyser will read. */
   document.querySelectorAll('[data-fields]').forEach(el=>{
     el.textContent = el.dataset.fields==='user' ? USER_SELECT : SP_SELECT;
   });
@@ -747,7 +747,7 @@ function spQuery(appQ, select){
 }
 
 /* One definition of what to ask Graph for, used by the live route and by every
-   query the page hands a district admin to run themselves. There used to be
+   query the page hands a tenant administrator to run themselves. There used to be
    five separate lists: the two Setup snippets, the Build a query buttons, the
    live route, and the analyser's expectations. Only the last two agreed, so a
    pasted result silently lost the Enabled, Sign-on URL and Token encryption
@@ -800,7 +800,7 @@ $('collapseBtn').addEventListener('click',()=>$('shell').classList.toggle('colla
 
 /* ==================== auth ==================== */
 let msalApp=null, account=null;
-const NOT_SIGNED = 'Not signed in. The district administrator signs in with their own account; this page never sees a password and asks only for read permissions.';
+const NOT_SIGNED = 'Not signed in. The tenant administrator signs in with their own account; this page never sees a password and asks only for read permissions.';
 
 async function initAuth(){
   const cfg=loadCfg();
@@ -865,7 +865,7 @@ async function buildAuth(){
 /* A hard two hour cap on a signed-in session, enforced whether the token needs
    renewing or not. Without it a session lasts as long as the tab: MSAL renews
    silently against the Microsoft sign-in cookie, so a forgotten tab keeps a live
-   read on a district's directory indefinitely.
+   read on the tenant's directory indefinitely.
 
    Three things make this actually hold:
    1. The start time lives in sessionStorage, not a variable, so reloading the
@@ -910,7 +910,7 @@ function endSessionForCap(){
   $('liveOut').innerHTML=card('Session ended at the two hour limit',
     findRow('warn','Reauthentication required',
       'This session reached its two hour cap and was ended.',
-      'The cap applies whether the token still worked or not, so that a tab left open cannot hold a live read on a district\'s directory. Anything already read has been cleared from the page. Sign in again to continue; you will be asked for credentials rather than passed straight through.'));
+      'The cap applies whether the token still worked or not, so that a tab left open cannot hold a live read on a tenant\'s directory. Anything already read has been cleared from the page. Sign in again to continue; you will be asked for credentials rather than passed straight through.'));
   try{ if(msalApp&&a) msalApp.logoutPopup({account:a}); }catch(e){}
 }
 
@@ -953,7 +953,7 @@ $('signOut').addEventListener('click', async ()=>{
   const a=account; account=null;
   if(capTimer) clearTimeout(capTimer);
   paintSession();
-  /* "End session" implies the district's data is gone, so clear what holds it:
+  /* "End session" implies the data is gone, so clear what holds it:
      the pasted payload, the in-memory service principal, and the query fields,
      which include a user principal name. The SAML and JWT tabs are independent
      of the tenant session and keep their own Clear buttons. */
@@ -1010,7 +1010,7 @@ function analyseServicePrincipal(sp){
   const mode=sp.preferredSingleSignOnMode;
   st.sso = mode==='saml'?'pass' : (mode==='oidc'||mode==='password'||mode==='linked')?'info' : 'warn';
   rows+=findRow(st.sso,'SSO mode',`<code>${esc(mode||'not set')}</code>`,
-    mode?'':'No single sign-on mode configured on this enterprise app. If the district thinks SAML is set up, they may have configured a different app instance. Duplicate apps with similar names are common.');
+    mode?'':'No single sign-on mode configured on this enterprise app. If they think SAML is set up, they may have configured a different app instance. Duplicate apps with similar names are common.');
   if(sp.accountEnabled===false)
     rows+=findRow('fail','Enabled','no','The service principal is disabled, so every sign-in fails regardless of the rest.');
   const ids=(sp.servicePrincipalNames||[]).filter(x=>x!==sp.appId);
@@ -1030,7 +1030,7 @@ function analyseServicePrincipal(sp){
   const notif=sp.notificationEmailAddresses||[];
   rows+=findRow(notif.length?'pass':'warn','Certificate notices',
     notif.length?notif.map(esc).join(', '):'nobody',
-    notif.length?'':`No notification address, so nobody in the district gets warned before the signing certificate expires. This is how integrations die quietly over a break. See ${msDoc('cert','managing SAML signing certificates')}.`);
+    notif.length?'':`No notification address, so nobody in anyone gets warned before the signing certificate expires. This is how integrations die quietly over a break. See ${msDoc('cert','managing SAML signing certificates')}.`);
   if(sp.tokenEncryptionKeyId)
     rows+=findRow('warn','Token encryption','enabled',
       `Assertions are encrypted, so they cannot be read from a browser capture. Turn it off for the duration of a test, or work from the SP logs. See ${msDoc('encryption','SAML token encryption')}.`);
@@ -1116,7 +1116,7 @@ function analyseUser(u){
 
 /* Assignments inherited through a group never appear on
    /users/{id}/appRoleAssignments, which returns direct assignments only.
-   Districts assign by group as the normal case, so treating an empty list as
+   Assigning by group is the normal case, so treating an empty list as
    "not assigned" reported AADSTS50105 for correctly configured users. A
    definitive answer has to come from the service principal side, via
    assignmentContext() below. Without it, say so rather than guess. */
@@ -1163,7 +1163,7 @@ function analyseAssignments(list, sp, ctx){
        is hidden from the caller, and nothing in the response says so. The
        verdict stays fail because that is the right primary diagnosis, but it
        has to show its working and name an authority rather than assert a
-       certainty it does not have. Telling a district their user is unassigned
+       certainty it does not have. Telling someone their user is unassigned
        when a hidden group grants access costs more than a hedge does. */
     const groups=ctx.groupIds.length, principals=ctx.assigned.size;
     const plural=(n,w)=>`${n} ${w}${n===1?'':'s'}`;
@@ -1172,7 +1172,7 @@ function analyseAssignments(list, sp, ctx){
       (groups===0
         ? ' <b>No group memberships were visible for this user at all.</b> If they should be in one, the signed-in account may not be able to see it, and this conclusion is unsafe as it stands.'
         : '')+
-      ` Membership of groups configured as hidden is not returned to every caller, so confirm under <em>Users and groups</em> on the enterprise app before telling a district that their user is unassigned. See ${msDoc('assign','assigning users and groups')}.`),
+      ` Membership of groups configured as hidden is not returned to every caller, so confirm under <em>Users and groups</em> on the enterprise app before telling anyone that their user is unassigned. See ${msDoc('assign','assigning users and groups')}.`),
       st:{assigned:'fail'}};
   }
   return {rows:findRow('warn','Assigned to app','no direct assignment; group assignments not checked',
@@ -1220,7 +1220,7 @@ function analyseSignIns(items, opts){
   /* opts.filteredByUser lets the empty case name the likeliest cause instead of
      shrugging at "the filter did not match". Deliberately a replacement clause
      rather than an extra sentence: this note is read mid-call, and a paragraph
-     gets skipped. The Free-tenant line stays in both branches, since districts
+     gets skipped. The Free-tenant line stays in both branches, since tenants
      on A1 are the audience it exists for. */
   const byUser=!!(opts&&opts.filteredByUser);
   if(!items||!items.length) return {rows:findRow('na','Sign-in log','no matching entries',
@@ -1315,7 +1315,7 @@ $('runChecks').addEventListener('click', async ()=>{
         sp=list[0];
         if(list.length>1) errors+=findRow('warn','Multiple apps matched',
           list.map(x=>`<code>${esc(x.displayName)}</code>`).join('<br>'),
-          'Analysing the first. Duplicate or near-duplicate enterprise apps are a real cause of "we configured it and nothing changed", because the district edits one and signs in through another.');
+          'Analysing the first. Duplicate or near-duplicate enterprise apps are a real cause of "we configured it and nothing changed", because someone edits one and signs in through another.');
         parts.spa=analyseServicePrincipal(sp);
       }
     }catch(e){ errors+=findRow('fail','Application read',esc(e.message),graphHint(e)); }
@@ -1400,8 +1400,8 @@ $('pasteMode').addEventListener('click',()=>{
    against it. Declared here, above the handlers that clear it. */
 let pastedSp=null;
 
-/* Clearing has to drop pastedSp too. Leaving it set let one district's app
-   configuration be compared against the next district's assignments. */
+/* Clearing has to drop pastedSp too. Leaving it set let one tenant's app
+   configuration be compared against the next tenant's assignments. */
 function clearPasted(){ pastedSp=null; $('pasteIn').value=''; $('liveOut').innerHTML=''; }
 $('pasteClear').addEventListener('click',clearPasted);
 
@@ -1413,7 +1413,7 @@ document.querySelectorAll('[data-ge]').forEach(btn=>{
   btn.addEventListener('click', ()=>{
     const app=$('qApp').value.trim(), user=$('qUser').value.trim();
     /* SP_SELECT and USER_SELECT are substituted from the same constants the
-       live route uses, so a query handed to a district admin always collects
+       live route uses, so a query handed to a tenant administrator always collects
        what the analyser will look for. USER_SELECT is replaced before USER, or
        the shorter token would eat the longer one. */
     const path=btn.dataset.ge
@@ -1887,7 +1887,7 @@ $('errGo').addEventListener('click',()=>{
   const guessed=!tagged&&/\d{4,7}[\s\S]*\d{4,7}/.test(raw);
   let rows=findRow(hit?'info':'na','Code',`<code>AADSTS${esc(n)}</code>`,
     (guessed?'<b>No <code>AADSTS</code> prefix in what you pasted</b>, so this is the first number found and may not be the code. Paste the value with its prefix to be certain.<br>':'')+
-    (hit?`<b>${esc(hit[0])}</b><br>${hit[1]}`:'Not in the short list here, which only covers the ones that recur in district integrations.'));
+    (hit?`<b>${esc(hit[0])}</b><br>${hit[1]}`:'Not in the short list here, which only covers the ones that recur in Entra integrations.'));
   rows+=findRow('info','Microsoft description',
     `<a href="https://login.microsoftonline.com/error?code=${esc(n)}" target="_blank" rel="noopener">login.microsoftonline.com/error?code=${esc(n)}</a>`,
     'Opens the current official description in a new tab, so it stays accurate as codes change.');

@@ -315,7 +315,7 @@ async function selfTest(){
   await t('both empty variants keep the Free tenant line', ()=>{
     const a=analyseSignIns([],{filteredByUser:true}).rows, b=analyseSignIns([]).rows;
     return /Free tenants cannot serve/.test(a)&&/Free tenants cannot serve/.test(b)
-      ? true : 'lost the line districts on A1 need';
+      ? true : 'lost the line tenants on A1 need';
   });
   await t('the empty note stays short enough to read mid-call', ()=>{
     const text=analyseSignIns([],{filteredByUser:true}).rows.replace(/<[^>]+>/g,'');
@@ -326,17 +326,17 @@ async function selfTest(){
     eq(analyseSignIns([{status:{errorCode:0}}],{filteredByUser:true}).st.signin,'pass'));
 
   /* ---- identity masking ----
-     Live tenant output names district staff and students and these sessions get
+     Live tenant output names real people and these sessions get
      screenshared, so it is masked by default. The domain survives because it is
      diagnostic rather than personal. This is a screenshare aid, not a security
      control: both forms are in the DOM and CSS picks one. */
-  await t('maskId keeps the first character and the domain', ()=>eq(maskId('jdoe@district.k12.st.us'),'j•••@district.k12.st.us'));
+  await t('maskId keeps the first character and the domain', ()=>eq(maskId('jdoe@contoso.com'),'j•••@contoso.com'));
   await t('maskId handles a value with no domain', ()=>eq(maskId('someuser'),'s•••'));
   await t('maskId handles null and empty without throwing', ()=>eq(maskId(null)+maskId(''),''));
   await t('pii emits both a masked and a full form', ()=>{
-    const h=pii('jdoe@district.k12.st.us');
-    if(!/<i>j•••@district\.k12\.st\.us<\/i>/.test(h)) return 'no masked form';
-    return has(h,/<b>jdoe@district\.k12\.st\.us<\/b>/);
+    const h=pii('jdoe@contoso.com');
+    if(!/<i>j•••@contoso.com<\/i>/.test(h)) return 'no masked form';
+    return has(h,/<b>jdoe@contoso.com<\/b>/);
   });
   await t('pii escapes a hostile identity in both forms', ()=>{
     const evil='<img src=x>@e.com';
@@ -574,20 +574,20 @@ async function selfTest(){
      Application.Read.All, AuditLog.Read.All, Directory.Read.All, User.Read.All,
      openid, profile, email. MSAL adds openid and profile to every request on its
      own. No offline_access, so no refresh token, so the Setup tab is telling
-     district admins the truth. That claim is made while asking for directory
+     tenant administrators the truth. That claim is made while asking for directory
      access, so it has to stay true. These pin the code side of it. */
   await t('SCOPES does not request offline_access', ()=>not(SCOPES.join(' '),/offline_access/));
   await t('SCOPES is exactly the four documented delegated permissions', ()=>{
     const want=['Application.Read.All','AuditLog.Read.All','Directory.Read.All','User.Read.All'];
     return SCOPES.slice().sort().join(',')===want.sort().join(',') ? true
-      : `SCOPES is now [${SCOPES}]. Adding one widens what a district admin must consent to, so change CLAUDE.md invariant 6 deliberately rather than editing this test.`;
+      : `SCOPES is now [${SCOPES}]. Adding one widens what a tenant administrator must consent to, so change CLAUDE.md invariant 6 deliberately rather than editing this test.`;
   });
   await t('every requested scope is read-only', ()=>{
     const bad=SCOPES.filter(s=>!/\.Read(\.All)?$/.test(s));
     return bad.length?`not read-only: ${bad.join(', ')}`:true;
   });
 
-  /* The Setup tab is what a district administrator reads before consenting, so
+  /* The Setup tab is what a tenant administrator reads before consenting, so
      it has to describe what the code actually asks for. Documentation drifting
      away from SCOPES is a promise quietly becoming untrue, and nothing else
      would catch it. */
@@ -744,7 +744,7 @@ async function selfTest(){
   /* ---- Graph field selection ----
      There used to be five separate lists of what to select: two Setup
      snippets, the Build a query buttons, the live route, and whatever the
-     analysers happened to read. Only the last two agreed, so a district admin
+     analysers happened to read. Only the last two agreed, so a tenant administrator
      who ran the handed-out query and pasted the result silently lost the
      Enabled, Sign-on URL and Token encryption checks. Enabled is a failure
      verdict. These read the field names straight out of the analyser source,
@@ -800,7 +800,7 @@ async function selfTest(){
   });
 
   /* ---- Setup tab claims ----
-     These are read by a district administrator deciding whether to consent, so
+     These are read by a tenant administrator deciding whether to consent, so
      they have to survive being checked. The session-lifetime claim did not:
      it said a session could not outlive an hour, and forceRefresh disproved it
      the same day. MSAL renews through a hidden iframe against the existing
