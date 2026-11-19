@@ -931,6 +931,98 @@ async function selfTest(){
     return has(c,/frame-src[^;]*login\.microsoftonline\.com/);
   });
 
+  /* ---- security review, November 2026 ---- */
+  await t('script-src carries no unsafe-inline and allows the inline script by hash', ()=>{
+    const c=document.querySelector('meta[http-equiv="Content-Security-Policy"]').getAttribute('content')||'';
+    const src=(c.match(/script-src([^;]*)/)||[])[1]||'';
+    if(/'unsafe-inline'|'unsafe-eval'/.test(src)) return 'script-src still allows inline or eval';
+    return has(src,/'sha256-[A-Za-z0-9+/]{43}='/);
+  });
+  /* The format checks above pass just as well with a stale hash, and a stale
+     hash means the browser runs nothing and ships a blank page. In an enforcing
+     browser this test cannot fail, because nothing would be running to report
+     it. It earns its place where CSP is not being enforced — a browser or
+     extension that ignores a meta-tag hash — which is exactly the setup where
+     someone edits the script, sees the page work locally, and pushes a page
+     that is blank for everyone else. */
+  await t('the CSP hash actually matches the inline script', async ()=>{
+    const el=document.querySelector('script:not([src])');
+    if(!el) return 'no inline script found to hash';
+    const c=document.querySelector('meta[http-equiv="Content-Security-Policy"]').getAttribute('content')||'';
+    const want=(c.match(/'sha256-([A-Za-z0-9+/]+=)'/)||[])[1];
+    if(!want) return 'no sha256 source in the CSP to compare against';
+    const buf=await crypto.subtle.digest('SHA-256', new TextEncoder().encode(el.textContent));
+    const got=btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
+    return got===want ? true
+      : `stale hash: the CSP says ${want}, the script hashes to ${got}. Run tools/update-csp-hash.ps1.`;
+  });
+  await t('script-src names the two libraries by exact URL, not by host', ()=>{
+    const c=document.querySelector('meta[http-equiv="Content-Security-Policy"]').getAttribute('content')||'';
+    const src=(c.match(/script-src([^;]*)/)||[])[1]||'';
+    const hosts=src.split(/\s+/).filter(x=>/^https:/.test(x));
+    const bare=hosts.filter(x=>!/\.js$/.test(x));
+    if(bare.length) return `host-wide source left in script-src: ${bare.join(' ')}`;
+    const loaded=Array.from(document.querySelectorAll('script[src^="https:"]')).map(x=>x.src);
+    const missing=loaded.filter(u=>!hosts.includes(u));
+    return missing.length?`loaded but not allowed by exact URL: ${missing.join(' ')}`:true;
+  });
+  await t('the anti-framing guard has been lifted on a top-level page', ()=>
+    document.getElementById('frameGuard') ? 'frameGuard style is still present' :
+    getComputedStyle(document.documentElement).display==='none' ? 'page is hidden' : true);
+  await t('a metadata error message is escaped where it is shown', async ()=>{
+    $('spIn').value='<md:Foo xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"/>';
+    await inspectSpMetadata();
+    const html=$('spOut').innerHTML; $('spIn').value=''; $('spOut').innerHTML='';
+    if(/<EntityDescriptor>/.test(html)) return 'the element name was inserted as raw markup';
+    return has(html,/&lt;EntityDescriptor&gt;/);
+  });
+  await t('parseSpMetadata messages carry no markup', ()=>{
+    try{ parseSpMetadata('<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"/>'); return 'accepted a Response'; }
+    catch(e){ return not(e.message,/<b>/); }
+  });
+  await t('Graph Explorer query: an app name is not rewritten by a later placeholder', async ()=>{
+    const realOpen=window.open;
+    try{
+      window.open=()=>null;
+      $('qApp').value="USER Portal & O'Brien #2"; $('qUser').value='jdoe@contoso.com';
+      Array.from(document.querySelectorAll('[data-ge]')).find(b=>/servicePrincipals/.test(b.dataset.ge)).click();
+      await new Promise(r=>setTimeout(r,50));
+      const q=$('liveOut').textContent;
+      if(/jdoe/.test(q)) return 'the user address was substituted into the app name';
+      if(/ & |#2/.test(q)) return 'the app name was not percent-encoded';
+      return has(q,/USER%20Portal%20%26%20O''Brien%20%232/);
+    } finally { window.open=realOpen; $('qApp').value=''; $('qUser').value=''; clearPasted(); }
+  });
+  await t('Graph Explorer is not opened with the noopener feature', async ()=>{
+    const realOpen=window.open; let feat;
+    try{
+      window.open=(u,n,f)=>{ feat=f; return null; };
+      document.querySelector('[data-ge]').click();
+      /* Let the click's clipboard write settle, or its late repaint lands on
+         top of the results table. */
+      await new Promise(r=>setTimeout(r,50));
+      return feat&&/noopener/.test(feat) ? 'noopener makes window.open return null, so every open reads as blocked' : true;
+    } finally { window.open=realOpen; clearPasted(); }
+  });
+  const fakeJwt=(head,body)=>[head,body].map(o=>btoa(JSON.stringify(o)).replace(/=+$/,'').replace(/\+/g,'-').replace(/\//g,'_')).join('.')+'.c2ln';
+  await t('a Graph access token is not reported as tampered with', async ()=>{
+    $('jwtIn').value=fakeJwt({alg:'RS256',kid:'k',nonce:'abc'},{aud:'00000003-0000-0000-c000-000000000000',iss:'https://sts.windows.net/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/'});
+    const realFetch=window.fetch; let fetched=false;
+    try{
+      window.fetch=()=>{ fetched=true; return Promise.reject(new Error('should not fetch')); };
+      await verifyJwt();
+      const html=$('jwtOut').innerHTML;
+      if(fetched) return 'fetched keys for a token that cannot be verified';
+      if(/modified|does not verify/.test(html)) return 'still reported as tampered';
+      return has(html,/not checkable/);
+    } finally { window.fetch=realFetch; $('jwtIn').value=''; $('jwtOut').innerHTML=''; }
+  });
+  await t('the footer does not claim the page makes no outbound requests', ()=>{
+    const f=document.querySelector('.foot').textContent;
+    if(/no storage/.test(f)) return 'footer still says no storage';
+    return has(f,/Google Fonts/);
+  });
+
   /* ---- item 11: nothing from a tenant may reach the DOM unescaped ---- */
   await t('esc covers all six characters', ()=>eq(esc('&<>"\'`'),'&amp;&lt;&gt;&quot;&#39;&#96;'));
   await t('a hostile display name cannot inject markup', ()=>{

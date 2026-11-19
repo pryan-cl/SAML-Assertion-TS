@@ -6,16 +6,29 @@
 <title>Federation Bench — Entra ID to third-party SSO diagnostics</title>
 <meta name="description" content="Client-side diagnostics for SAML assertions, OIDC tokens, AADSTS errors, and live read-only Entra ID tenant configuration checks.">
 <!-- The page promises that nothing leaves the browser. This is what enforces it.
-     connect-src is the load-bearing line: it stops any injected or compromised
-     script from posting a pasted assertion anywhere. 'unsafe-inline' is forced by
-     the single-file design, so script-src is weaker than it looks; the origin
-     allowlist still limits what can be pulled in. frame-src is for MSAL's hidden
-     silent-renewal iframe. frame-ancestors is deliberately absent because it is
-     ignored in a meta tag, and GitHub Pages cannot send headers. 'self' on
-     script-src is there for selftest.js, which loads only under ?selftest; it
-     widens nothing meaningful next to 'unsafe-inline', since putting a file on
-     this origin already requires repository write access. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src https://graph.microsoft.com https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; base-uri 'none'; form-action 'none'">
+     script-src carries no 'unsafe-inline'. The one inline script is allowed by
+     its SHA-256 hash, so markup injected through a missed esc() call (an
+     onerror handler or a script tag) is refused by the browser instead of run.
+     That matters more than connect-src: connect-src blocks fetch and XHR, but
+     CSP does not govern top-level navigation, so script that runs can still
+     leave by setting location. Stopping it from running is the real control.
+     The hash covers the inline script byte for byte. Any edit to it, even
+     whitespace, changes the hash and the page stops working until
+     tools/update-csp-hash.ps1 is run. Run it before every push; with -Check it
+     only reports, for use in deploy.ps1.
+     The two libraries are allowed by exact URL, not by host, so nothing else on
+     cdnjs or jsDelivr can load here, including old library versions with
+     known CSP bypasses. 'self' is for selftest.js, which loads only under
+     ?selftest. frame-src is for MSAL's hidden silent-renewal iframe.
+     frame-ancestors is absent because a meta tag cannot carry it and GitHub
+     Pages cannot send headers; the anti-framing guard at the top of the
+     script stands in for it. -->
+<meta name="referrer" content="no-referrer">
+<!-- Anti-framing guard. Hidden until the script confirms the page is not inside
+     another site's frame. If the script fails to load (a stale CSP hash, say),
+     the page stays blank, which fails closed and makes the break obvious. -->
+<style id="frameGuard">html{display:none!important}</style>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-LcEYtTJW5pGxMr0MlwekERilD0r6glkrGXpNN4sjttM=' https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.30.0/lib/msal-browser.min.js; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src https://graph.microsoft.com https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; base-uri 'none'; form-action 'none'">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -290,7 +303,7 @@ pre.snip b{color:var(--info);font-weight:400}
     <div class="nav-group">Configuration</div>
     <button class="chan" role="tab" id="tab-setup" aria-selected="false" data-panel="p-setup" data-title="Setup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 5H3M21 5h-7M8 12H3M21 12H12M14 19H3M21 19h-3"/><path d="M14 3v4M12 10v4M17 17v4"/></svg><span class="nav-label">Setup</span></button>
   </nav>
-  <div class="side-foot">Read only. Nothing stored or uploaded.</div>
+  <div class="side-foot">Read only. Nothing uploaded.</div>
 </aside>
 
 <main>
@@ -312,7 +325,7 @@ pre.snip b{color:var(--info);font-weight:400}
   <div class="io">
     <div class="io-head">
       <span class="io-label">Tenant session</span>
-      <span class="io-hint" id="modeHint">Read-only, delegated, expires with this tab or after two hours</span>
+      <span class="io-hint" id="modeHint">Read-only, delegated, ends when you leave this page or after two hours</span>
     </div>
     <div class="io-row">
       <label><span>Application (client) ID</span>
@@ -559,7 +572,7 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
       <li>Copy the Application (client) ID and the Directory (tenant) ID from the Overview blade into the fields above.</li>
       <li>No client secret. This is a public client and does not need one.</li>
     </ol>
-    <p>Client ID and tenant ID are public identifiers, not credentials, so this page keeps them in <code>localStorage</code> to save retyping. Tokens are held in <code>sessionStorage</code> and never persist past the tab. <b>Forget these IDs</b> clears the stored config.</p>
+    <p>Client ID and tenant ID are public identifiers, not credentials, so this page keeps them in <code>localStorage</code> to save retyping. Tokens are held in <code>sessionStorage</code> and are wiped when you leave or reload the page. <b>Forget these IDs</b> clears the stored config.</p>
   </div>
 
   <div class="card notes">
@@ -578,7 +591,7 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
     <p>Either way, tell them plainly that consent is tenant-wide and persists until revoked, and show them where to revoke it: Entra admin center &rarr; Enterprise applications &rarr; your app &rarr; Permissions, or delete the service principal outright. Offering the revocation path unprompted is what makes the ask credible.</p>
     <h3>What this page does with the token</h3>
     <ul>
-      <li>MSAL cache is <code>sessionStorage</code>, so closing the tab discards it. No tokens in <code>localStorage</code>, which holds only the client and tenant IDs described above.</li>
+      <li>MSAL cache is <code>sessionStorage</code>, and it is wiped whenever you leave, reload, or close the page. No tokens in <code>localStorage</code>, which holds only the client and tenant IDs described above.</li>
       <li>No refresh token is requested or stored, so nothing here can resume a session later. Inside an open tab MSAL would otherwise renew silently against your existing Microsoft sign-in for as long as the tab stayed open.</li>
       <li><b>A signed-in session is capped at two hours</b>, applied whether the token still works or not. At the cap the session ends, anything read is cleared from the page, and signing in again asks for credentials rather than passing you straight through. A tab left open cannot hold a live read on the tenant's directory indefinitely.</li>
       <li>Every call is a GET. There is no write path anywhere in this file.</li>
@@ -588,7 +601,7 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
 </section>
 
 <p class="foot">
-  Static page, no backend, no analytics, no storage. Outbound requests happen only when you sign in to a tenant or run the optional token signature check, and go to Microsoft endpoints.<br>
+  Static page, no backend, no analytics. Every page load fetches fonts from Google Fonts and two pinned libraries from cdnjs and jsDelivr, so those services see your IP address. Nothing you paste or read from a tenant goes anywhere except Microsoft endpoints, and only when you sign in or run the optional token signature check. Your browser keeps the client and tenant IDs between visits; tokens are discarded when you leave the page.<br>
   Experimental tool. Intended to augment, not replace, standard Entra admin center and Graph Explorer workflows.
 </p>
 
@@ -597,6 +610,18 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
 </div>
 
 <script>
+/* Anti-framing. A meta CSP cannot carry frame-ancestors, so another site could
+   load this page in an invisible frame and trick a click on Sign in. Unhide
+   only when the page is top level, or framed by its own origin, which is how
+   MSAL's hidden renewal iframe loads it. A cross-origin parent throws on the
+   origin read, which counts as framed. Runs first so a later error cannot leave
+   the page hidden when it is legitimately on top. */
+(function(){
+  let ok=window.top===window.self;
+  if(!ok){ try{ ok=window.top.location.origin===location.origin; }catch(e){ ok=false; } }
+  if(ok){ const g=document.getElementById('frameGuard'); if(g) g.remove(); }
+})();
+
 /* =====================================================================
    CONFIGURE ME
    DEFAULT_CLIENT_ID prefills the client ID field. Leave it empty and
@@ -878,7 +903,7 @@ async function buildAuth(){
     $('who').textContent='The MSAL library did not load. Check the script tag or your network.';
     return;
   }
-  $('modeHint').textContent='Read-only, delegated, expires with this tab or after two hours';
+  $('modeHint').textContent='Read-only, delegated, ends when you leave this page or after two hours';
   /* A rejection from initialize() or handleRedirectPromise() used to escape as
      an unhandled rejection, skipping paintSession(). The button stayed live
      against a half-built instance and the panel still read "Not signed in". */
@@ -915,9 +940,10 @@ async function buildAuth(){
    read on the tenant's directory indefinitely.
 
    Three things make this actually hold:
-   1. The start time lives in sessionStorage, not a variable, so reloading the
-      page cannot reset the clock while MSAL restores the account from its cache.
-      An account with no recorded start is treated as expired rather than trusted.
+   1. The start time lives in sessionStorage, not a variable. Leaving or
+      reloading the page now wipes the session outright (see the pagehide
+      handler below), so this is a backstop: an account found in the cache with
+      no recorded start is treated as expired rather than trusted.
    2. The timer is the courtesy, not the control. Background tabs throttle
       timers, so token() also checks on every use and refuses to hand one out.
    3. Re-signing in uses prompt 'login'. Anything weaker is satisfied by the
@@ -927,6 +953,22 @@ const SESSION_MAX_MS=2*60*60*1000;
 const SESSION_KEY='fedbench.sessionStart';
 let capTimer=null, forceReauth=false;
 
+/* Tokens must not outlive the page. Every Pages site under one github.io
+   account shares this origin, and sessionStorage belongs to the tab and origin,
+   not to this page. Without this, navigating the same tab to any other
+   project on the account would hand that page the MSAL cache. So the cache is
+   wiped whenever this page is left or reloaded, at the cost of signing in
+   again after a reload. A popup (MSAL's sign-in window, which loads this same
+   URL) is left alone so it cannot wipe anything mid-handshake; its storage is
+   its own copy in any case. So is a frame: MSAL's hidden renewal iframe shares
+   this tab's sessionStorage, and it is removed after every silent renewal, so
+   letting it clear on pagehide would sign the parent out each time. A page
+   restored from the back-forward cache reloads, so it never shows a live
+   session with no tokens behind it. */
+if(!window.opener && window.top===window.self){
+  addEventListener('pagehide',()=>{ try{ sessionStorage.clear(); }catch(e){} });
+  addEventListener('pageshow',ev=>{ if(ev.persisted) location.reload(); });
+}
 const sessionStart=()=>{ const v=+sessionStorage.getItem(SESSION_KEY); return v>0?v:0; };
 function markSessionStart(){
   try{ sessionStorage.setItem(SESSION_KEY,String(Date.now())); }catch(e){}
@@ -1470,12 +1512,18 @@ document.querySelectorAll('[data-ge]').forEach(btn=>{
        live route uses, so a query handed to a tenant administrator always collects
        what the analyser will look for. USER_SELECT is replaced before USER, or
        the shorter token would eat the longer one. */
-    const path=btn.dataset.ge
-      .replace(/SP_SELECT/g, SP_SELECT)
-      .replace(/USER_SELECT/g, USER_SELECT)
-      .replace(/APP_NAME/g, app.replace(/'/g,"''") || 'APP_NAME')
-      .replace(/APP_GUID/g, GUID_RE.test(app)?app:'APP_GUID')
-      .replace(/USER/g, user?encodeURIComponent(user):'USER');
+    /* One pass, longest tokens first in the alternation. Chained replaces let a
+       substituted value be rewritten by a later step: an app called
+       "USER Portal" had its name replaced with the user's address. The app name
+       is OData-quoted and then percent-encoded, as spQuery does, so a name
+       containing & or # cannot cut the copied query short. */
+    const subs={
+      SP_SELECT, USER_SELECT,
+      APP_NAME: app ? encodeURIComponent(app.replace(/'/g,"''")) : 'APP_NAME',
+      APP_GUID: GUID_RE.test(app) ? app : 'APP_GUID',
+      USER: user ? encodeURIComponent(user) : 'USER'
+    };
+    const path=btn.dataset.ge.replace(/SP_SELECT|USER_SELECT|APP_NAME|APP_GUID|USER/g, k=>subs[k]);
     const full='https://graph.microsoft.com/v1.0'+path;
     const left=[];
     if(/APP_NAME|APP_GUID/.test(path)) left.push('application');
@@ -1487,8 +1535,18 @@ document.querySelectorAll('[data-ge]').forEach(btn=>{
     /* Open before awaiting anything. A window.open that runs after an await is
        no longer attributed to the click, so the popup blocker drops it and the
        discarded return value made that invisible. */
+    /* Not opened with the 'noopener' feature: with it, window.open returns null
+       by specification, so `blocked` was always true and every successful open
+       printed "the popup was blocked" and dumped the query into the panel.
+       Severing the opener by hand is attempted instead, but it is NOT equivalent:
+       on a cross-origin target the browser may refuse the write, and Graph
+       Explorer is cross-origin, so assume the opener link survives. What is being
+       accepted is that a Microsoft-operated page could navigate this tab. That is
+       a smaller cost than telling every user their popup was blocked when it was
+       not. Revisit if this ever opens anything but Graph Explorer. */
     const win=window.open(GE_BASE+'?request='+encodeURIComponent(path.replace(/^\//,''))+'&method=GET&version=v1.0',
-      '_blank','noopener');
+      '_blank');
+    if(win){ try{ win.opener=null; }catch(e){} }
     const blocked=!win;
 
     const showQuery=()=>{ $('liveOut').innerHTML=card('Query to run in Graph Explorer',
@@ -1928,7 +1986,7 @@ function parseSpMetadata(raw){
     throw new Error('Decoded but not well-formed XML. The usual cause is a partial copy, so re-copy the whole document including the closing tag.');
   const root=doc.documentElement;
   if(root.localName==='Response'||root.localName==='AuthnRequest'||root.localName==='LogoutRequest')
-    throw new Error(`This is a SAML ${root.localName}, not metadata. The <b>SAML message</b> tab reads those.`);
+    throw new Error(`This is a SAML ${root.localName}, not metadata. The SAML message tab reads those.`);
   /* A federation may publish many entities in one file. Take the first that
      describes a role, not simply the first child, or an aggregate beginning with
      a signature-only entry reads as empty. */
@@ -1938,7 +1996,7 @@ function parseSpMetadata(raw){
        ||first(root,'EntityDescriptor')||root;
   }
   if(ed.localName!=='EntityDescriptor')
-    throw new Error(`Expected an <EntityDescriptor> at the root. Found <${esc(ed.localName)}>.`);
+    throw new Error(`Expected an <EntityDescriptor> at the root. Found <${ed.localName}>.`);
   const spd=first(ed,'SPSSODescriptor'), idpd=first(ed,'IDPSSODescriptor');
   if(!spd&&!idpd)
     throw new Error('This <EntityDescriptor> carries neither an <SPSSODescriptor> nor an <IDPSSODescriptor>, so there is nothing here to check.');
@@ -2094,7 +2152,10 @@ async function inspectSpMetadata(){
   }
   let md;
   try{ md=parseSpMetadata($('spIn').value); }
-  catch(e){ out.innerHTML=card('Could not read the metadata',findRow('fail','Metadata',e.message)); return; }
+  /* Messages are plain text, so they are escaped here like any other value.
+     They used to be passed raw, which broke the findRow contract and made the
+     literal <EntityDescriptor> in them vanish as an unknown tag. */
+  catch(e){ out.innerHTML=card('Could not read the metadata',findRow('fail','Metadata',esc(e.message))); return; }
   const states={}; let html='',rows='';
 
   rows=findRow(md.entityId?'pass':'fail','Entity ID',md.entityId?`<code>${esc(md.entityId)}</code>`:'missing',
@@ -2360,6 +2421,15 @@ async function verifyJwt(){
   const btn=$('jwtVerify'); let j;
   try{ j=parseJwt($('jwtIn').value); }
   catch(e){ $('jwtOut').innerHTML=card('Could not decode',findRow('fail','Decoder',esc(e.message))); return; }
+  /* Access tokens for Microsoft Graph carry a nonce in the header and are
+     signed over a hashed form of it, so they never verify outside Graph. Before
+     this check a perfectly good Graph token was reported as tampered with. */
+  const aud=String(j.body.aud||'');
+  if(j.head.nonce || aud==='00000003-0000-0000-c000-000000000000' || /^https:\/\/graph\.microsoft\.com\/?$/i.test(aud)){
+    $('jwtOut').insertAdjacentHTML('afterbegin',card('Signature check',findRow('na','Signature','not checkable for this token',
+      'This is an access token for Microsoft Graph. Graph tokens are signed in a form only Graph itself can verify, so a mismatch here would mean nothing. That is expected, not a sign of tampering. To test an SSO integration, inspect the id_token or the access token issued for the app instead.')));
+    return;
+  }
   const tid=(String(j.body.iss||'').match(/([0-9a-f-]{36})/i)||[])[1]||'common';
   const v2=/\/v2\.0/.test(j.body.iss||'');
   const url=`https://login.microsoftonline.com/${tid}/discovery/${v2?'v2.0/':''}keys`;
