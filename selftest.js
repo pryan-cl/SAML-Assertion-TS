@@ -1335,6 +1335,40 @@ async function selfTest(){
   seen.saml=null; seen.entra=null; seen.sp=null;
   $('spIn').value=''; $('spOut').innerHTML='';
 
+  /* Synthetic ClassLink AD profile; no real directory values or identifiers. */
+  const clNames=['displayname','distinguishedname','domain','givenname','objectguid','mail','sam','sn','upn'];
+  const clAttribute=(name,value='example')=>`<saml:Attribute Name="${name}"><saml:AttributeValue>${value}</saml:AttributeValue></saml:Attribute>`;
+  const clFixture=(extra='',names=clNames,audience='urn:classlink:tms:saml')=>{
+    const xml=samlFixture('').replace('https://sp.example</saml:Audience>',audience+'</saml:Audience>')
+      .replace('</saml:Assertion>',`<saml:AttributeStatement>${names.map(n=>clAttribute('ClassLink/'+n)).join('')}${extra}</saml:AttributeStatement></saml:Assertion>`);
+    return {xml,asrt:new DOMParser().parseFromString(xml,'application/xml').getElementsByTagNameNS('*','Assertion')[0]};
+  };
+  await t('ClassLink AD profile accepts all required claims and groups',()=>
+    eq(analyseClassLinkSaml(clFixture(clAttribute('ClassLink/groups','ExampleGroup')).asrt).state,'pass'));
+  await t('ClassLink group overage warns without pretending the login cause is proven',()=>{
+    const r=analyseClassLinkSaml(clFixture(clAttribute('http://schemas.microsoft.com/claims/groups.link','https://example.org/groups')).asrt);
+    return r.state==='warn' && /150-group/.test(r.rows) && /does not prove/.test(r.rows) && /1,000/.test(r.rows) && /directly/.test(r.rows) ? true:'overage guidance incomplete';
+  });
+  await t('ClassLink missing user claim is a failure',()=>
+    eq(analyseClassLinkSaml(clFixture(clAttribute('ClassLink/groups'),clNames.filter(n=>n!=='sam')).asrt).state,'fail'));
+  await t('ClassLink empty user claim is a failure',()=>
+    eq(analyseClassLinkSaml(clFixture(clAttribute('ClassLink/groups')+clAttribute('ClassLink/sam',''),clNames.filter(n=>n!=='sam')).asrt).state,'fail'));
+  await t('ClassLink missing groups does not assume overage',()=>{
+    const r=analyseClassLinkSaml(clFixture().asrt);
+    return r.state==='fail' && /does not prove group overage/.test(r.rows)?true:'missing groups misclassified';
+  });
+  await t('ClassLink profile does not apply to unrelated SAML apps',()=>
+    eq(analyseClassLinkSaml(clFixture('',[],'urn:example:other').asrt),null));
+  await t('ClassLink profile never interpolates hostile group values',()=>
+    not(analyseClassLinkSaml(clFixture(clAttribute('ClassLink/groups','&lt;img src=x onerror=alert(1)&gt;')).asrt).rows,/<img/));
+  await t('ClassLink overage reaches the rendered SAML verdict',async()=>{
+    seen.sp=null; seen.saml=null;
+    $('samlIn').value=clFixture(clAttribute('http://schemas.microsoft.com/claims/groups.link','https://example.org/groups')).xml;
+    await inspectSaml();
+    const segment=Array.from($('samlOut').querySelectorAll('.seg')).find(n=>n.querySelector('em').textContent==='clm');
+    return segment && segment.dataset.state==='warn' && /ClassLink AD login checks/.test($('samlOut').innerHTML)?true:'profile did not affect claims verdict';
+  });
+
   /* Leave no fixture behind, in the inputs or in memory. clearPasted() also
      drops liveOut, which the results table below then fills. */
   clearPasted();

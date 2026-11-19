@@ -1602,6 +1602,56 @@ function certValidity(der){
   }
   return null;
 }
+/* ClassLink AD login profile: claim presence can be checked from a response;
+   source mappings, CMC configuration and the final login outcome cannot. */
+function samlGroupOverage(asrt){
+  return L(asrt,'Attribute').some(a=>a.getAttribute('Name')===
+    'http://schemas.microsoft.com/claims/groups.link');
+}
+function analyseClassLinkSaml(asrt){
+  const attrs=L(asrt,'Attribute');
+  const audiences=L(asrt,'Audience').map(txt);
+  if(!audiences.includes('urn:classlink:tms:saml') &&
+     !attrs.some(a=>(a.getAttribute('Name')||'').startsWith('ClassLink/'))) return null;
+  let rows=findRow('info','Profile','ClassLink login with Active Directory',
+    'These checks follow the ClassLink Entra SAML setup article. They check the values delivered, not the configured source attributes or whether ClassLink matched the AD account.');
+  let state='pass';
+  const required=['displayname','distinguishedname','domain','givenname','objectguid','mail','sam','sn','upn'];
+  required.forEach(name=>{
+    const values=attrs.filter(a=>a.getAttribute('Name')==='ClassLink/'+name)
+      .flatMap(a=>L(a,'AttributeValue').map(txt)).filter(Boolean);
+    if(!values.length) state='fail';
+    rows+=findRow(values.length?'pass':'fail','ClassLink/'+name,
+      values.length?'present':'missing or empty',
+      values.length?'Confirm the value matches the existing AD account in ClassLink.':
+      'Entra → Enterprise applications → this application → Single sign-on → Attributes & Claims. Use the exact lowercase name above and namespace ClassLink; follow the article for the source attribute.');
+  });
+  const groups=attrs.filter(a=>a.getAttribute('Name')==='ClassLink/groups')
+    .flatMap(a=>L(a,'AttributeValue').map(txt)).filter(Boolean);
+  const overage=samlGroupOverage(asrt);
+  const groupState=overage?'warn':groups.length?'pass':'fail';
+  state=roll([state,groupState]);
+  rows+=findRow(groupState,'ClassLink/groups',overage?'group overage detected':
+    groups.length?`${groups.length} group value(s) delivered`:'missing or empty',
+    overage?'Entra returned groups.link instead of the required group names. SAML assertions have a 150-group limit including nested memberships. This is a configuration mismatch and a possible contributor to login or access failures; it does not prove the final ClassLink error.':
+    groups.length?'The article expects AD sAMAccountName values. A response alone cannot confirm the configured source attribute.':
+    'Configure the group claim with name groups, namespace ClassLink and source sAMAccountName. An absent claim alone does not prove group overage.');
+  if(overage){
+    rows+=findRow('warn','Resolve group overage','Reduce the groups emitted for this application',
+      `In Attributes & Claims, confirm source sAMAccountName, name groups and namespace ClassLink. If ClassLink needs a defined set, consider Groups assigned to the application and assign the required AD-synced groups. This excludes nested membership: the user must belong directly to an assigned group. Agree the required groups with ClassLink before changing the scope. Alternatively use a suitable group filter; filtering is not applied above 1,000 memberships. Do not remove legitimate AD memberships just to shrink a token. See ${msDoc('groups','Microsoft group-claim limits and options')}.`);
+    rows+=findRow('info','Retest','Capture a fresh SAML response',
+      'Confirm ClassLink/groups contains every required group name and groups.link is absent, then test login and expected access with an affected user.');
+  }
+  rows+=findRow('info','ClassLink-side check','CMC → Settings → Login Page → SAML',
+    'The article specifies Entra (v1.0). Verify the entrypoint and app federation metadata URL belong to this Entra application. These settings cannot be verified from a response alone.');
+  rows+=findRow('info','Account matching','Compare the AD identity claims',
+    'Check ClassLink/upn, ClassLink/sam, ClassLink/domain and ClassLink/objectguid against the existing AD account. Email and AD UPN domains may differ; that alone is not a reason to change NameID.');
+  rows+=findRow('info','Setup reference',
+    '<a href="https://help.classlink.com/s/article/entra-saml-setup" target="_blank" rel="noopener">ClassLink: Entra SAML with Active Directory</a>',
+    'Administrator sign-in may be required to read the article.');
+  return {state,rows};
+}
+
 async function inspectSaml(){
   if(oversize('samlIn','samlOut','SAML message')) return;
   const out=$('samlOut'); let xml,how;
@@ -1771,6 +1821,15 @@ async function inspectSaml(){
         bare?'':`If the SP expects short names like <code>email</code>, edit them under <em>Attributes &amp; Claims</em> and clear the namespace field. See ${msDoc('claims','customising SAML claims')}.`);
     }
     html+=card(`Claims (${attrs.length})`, t||'<p class="empty">No attribute statements.</p>');
+    const classlink=analyseClassLinkSaml(asrt);
+    if(classlink){
+      states.claims=roll([states.claims,classlink.state]);
+      html+=card('ClassLink AD login checks',classlink.rows);
+    } else if(samlGroupOverage(asrt)){
+      states.claims=roll([states.claims,'warn']);
+      html+=card('Group membership',findRow('warn','Group overage','groups.link is present',
+        `Entra supplied a lookup link instead of group values after exceeding the SAML group limit. This can affect applications that require group names. See ${msDoc('groups','Microsoft group-claim limits and options')}.`));
+    }
   }
   const segs=[{tag:'sts',state:states.status||'na'},{tag:'aud',state:states.audience||'na'},
     {tag:'sig',state:states.sig||'na'},{tag:'exp',state:states.time||'na'},{tag:'clm',state:states.claims||'na'}];
