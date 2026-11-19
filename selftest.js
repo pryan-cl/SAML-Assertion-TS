@@ -822,10 +822,23 @@ async function selfTest(){
   /* The claim is only true while offline_access stays out of SCOPES. */
   await t('the no-refresh-token claim still matches the code', ()=>
     not(SCOPES.join(' '),/offline_access/));
-  await t('the localStorage claim is scoped to tokens', ()=>{
+  /* This used to require the claim be SCOPED ("no tokens in localStorage"),
+     because the page kept the two IDs there and an absolute claim would have
+     been a lie. Moving them to sessionStorage on 2026-11-19 made the absolute
+     claim true, so the test moved with the truth rather than the wording being
+     bent to keep an old test green. The pairing is the point: the text may only
+     say "nothing" while the behaviour actually writes nothing. */
+  await t('the Setup localStorage claim matches what the code does', ()=>{
     const txt=$('p-setup').innerText;
-    if(!/No tokens in/.test(txt)) return 'still reads as an absolute claim about localStorage';
-    return has(txt,/client and tenant IDs/i);
+    const absolute=/nothing is written to .?localStorage.? at all/i.test(txt);
+    if(!absolute) return 'Setup no longer states the absolute claim';
+    const cRef=$('cfgClient').value, tRef=$('cfgTenant').value;
+    try{
+      localStorage.clear();
+      $('cfgClient').value='zzzz'; $('cfgTenant').value='yyyy'; saveCfg(); loadCfg();
+      return localStorage.length===0 ? true
+        : `Setup claims nothing is written to localStorage, but ${localStorage.length} key(s) appeared: ${Object.keys(localStorage).join(', ')}`;
+    } finally { $('cfgClient').value=cRef; $('cfgTenant').value=tRef; try{ sessionStorage.removeItem(CFG_KEY); }catch(e){} }
   });
   await t('Setup procedures carry documentation links', ()=>{
     const n=$('p-setup').querySelectorAll('a[data-doc]').length;
@@ -1021,6 +1034,68 @@ async function selfTest(){
     const f=document.querySelector('.foot').textContent;
     if(/no storage/.test(f)) return 'footer still says no storage';
     return has(f,/Google Fonts/);
+  });
+
+  /* ---- the two IDs must not outlive the browser session ----
+     This tool is run on shared machines, so the rule is that closing the
+     browser leaves nothing of one person's behind for the next. localStorage
+     survives that; sessionStorage does not. The blanket sessionStorage wipe has
+     to keep working for tokens while sparing this one key, or the IDs vanish on
+     every reload and the fields are permanently blank. */
+  await t('the two IDs are kept in sessionStorage, not localStorage', ()=>{
+    const cRef=$('cfgClient').value, tRef=$('cfgTenant').value;
+    try{
+      sessionStorage.removeItem(CFG_KEY); localStorage.removeItem(CFG_KEY);
+      $('cfgClient').value='11111111-2222-3333-4444-555555555555';
+      $('cfgTenant').value='66666666-7777-8888-9999-aaaaaaaaaaaa';
+      saveCfg();
+      if(localStorage.getItem(CFG_KEY)!==null) return 'the IDs were written to localStorage, which survives closing the browser';
+      const s=sessionStorage.getItem(CFG_KEY);
+      if(!s) return 'the IDs were not written to sessionStorage either';
+      return has(s,/11111111-2222-3333-4444-555555555555/);
+    } finally { $('cfgClient').value=cRef; $('cfgTenant').value=tRef; try{ sessionStorage.removeItem(CFG_KEY); }catch(e){} }
+  });
+  await t('this page writes nothing to localStorage', ()=>{
+    const cRef=$('cfgClient').value, tRef=$('cfgTenant').value;
+    try{
+      localStorage.clear();
+      $('cfgClient').value='aaaa'; $('cfgTenant').value='bbbb'; saveCfg(); loadCfg();
+      return localStorage.length===0 ? true : `localStorage holds ${localStorage.length} key(s): ${Object.keys(localStorage).join(', ')}`;
+    } finally { $('cfgClient').value=cRef; $('cfgTenant').value=tRef; try{ sessionStorage.removeItem(CFG_KEY); }catch(e){} }
+  });
+  await t('a copy left in localStorage by an older version is deleted, not adopted', ()=>{
+    const cRef=$('cfgClient').value, tRef=$('cfgTenant').value;
+    try{
+      sessionStorage.removeItem(CFG_KEY);
+      localStorage.setItem(CFG_KEY, JSON.stringify({clientId:'left-behind',tenantId:'left-behind'}));
+      const cfg=loadCfg();
+      if(localStorage.getItem(CFG_KEY)!==null) return 'the stale localStorage copy was left in place';
+      if(cfg.clientId==='left-behind') return 'the previous person’s ID was adopted into the new session';
+      return true;
+    } finally { $('cfgClient').value=cRef; $('cfgTenant').value=tRef; try{ localStorage.removeItem(CFG_KEY); }catch(e){} }
+  });
+  await t('the session wipe clears tokens but spares the two IDs', ()=>{
+    try{
+      sessionStorage.setItem(CFG_KEY, JSON.stringify({clientId:'keep-me',tenantId:'keep-me'}));
+      sessionStorage.setItem('msal.token.keys.something','a-token');
+      sessionStorage.setItem(SESSION_KEY, String(Date.now()));
+      clearSessionKeepingCfg();
+      if(sessionStorage.getItem('msal.token.keys.something')!==null) return 'a token key survived the wipe';
+      if(sessionStorage.getItem(SESSION_KEY)!==null) return 'the session clock survived the wipe';
+      const kept=sessionStorage.getItem(CFG_KEY);
+      return kept && /keep-me/.test(kept) ? true : 'the two IDs were wiped, so they would vanish on every reload';
+    } finally { try{ sessionStorage.removeItem(CFG_KEY); }catch(e){} }
+  });
+  await t('Forget these IDs clears both stores', ()=>{
+    const cRef=$('cfgClient').value, tRef=$('cfgTenant').value;
+    try{
+      sessionStorage.setItem(CFG_KEY,'{"clientId":"x"}');
+      localStorage.setItem(CFG_KEY,'{"clientId":"x"}');
+      $('cfgForget').click();
+      const left=[sessionStorage.getItem(CFG_KEY)!==null?'sessionStorage':null,
+                  localStorage.getItem(CFG_KEY)!==null?'localStorage':null].filter(Boolean);
+      return left.length?`still present in ${left.join(' and ')}`:true;
+    } finally { $('cfgClient').value=cRef; $('cfgTenant').value=tRef; }
   });
 
   /* ---- item 11: nothing from a tenant may reach the DOM unescaped ---- */

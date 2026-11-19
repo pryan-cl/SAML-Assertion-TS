@@ -28,7 +28,7 @@
      another site's frame. If the script fails to load (a stale CSP hash, say),
      the page stays blank, which fails closed and makes the break obvious. -->
 <style id="frameGuard">html{display:none!important}</style>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-LcEYtTJW5pGxMr0MlwekERilD0r6glkrGXpNN4sjttM=' https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.30.0/lib/msal-browser.min.js; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src https://graph.microsoft.com https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-E8Tt9bvFH5ZfJE/L50E5X30615WMDkZ76rsrzVICFFM=' https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.30.0/lib/msal-browser.min.js; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src https://graph.microsoft.com https://login.microsoftonline.com; frame-src https://login.microsoftonline.com; base-uri 'none'; form-action 'none'">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -572,7 +572,7 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
       <li>Copy the Application (client) ID and the Directory (tenant) ID from the Overview blade into the fields above.</li>
       <li>No client secret. This is a public client and does not need one.</li>
     </ol>
-    <p>Client ID and tenant ID are public identifiers, not credentials, so this page keeps them in <code>localStorage</code> to save retyping. Tokens are held in <code>sessionStorage</code> and are wiped when you leave or reload the page. <b>Forget these IDs</b> clears the stored config.</p>
+    <p>Client ID and tenant ID are public identifiers, not credentials, but this tool gets run on shared machines, so nothing of yours is left behind for whoever uses the browser next. Both are held in <code>sessionStorage</code>: kept while you reload and move around the page, and <b>discarded when you close the tab or the browser</b>. Tokens are discarded sooner still, the moment you leave the page. <b>This page writes nothing to <code>localStorage</code></b>, and clears any copy left there by an older version. <b>Forget these IDs</b> clears them immediately.</p>
   </div>
 
   <div class="card notes">
@@ -591,7 +591,7 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
     <p>Either way, tell them plainly that consent is tenant-wide and persists until revoked, and show them where to revoke it: Entra admin center &rarr; Enterprise applications &rarr; your app &rarr; Permissions, or delete the service principal outright. Offering the revocation path unprompted is what makes the ask credible.</p>
     <h3>What this page does with the token</h3>
     <ul>
-      <li>MSAL cache is <code>sessionStorage</code>, and it is wiped whenever you leave, reload, or close the page. No tokens in <code>localStorage</code>, which holds only the client and tenant IDs described above.</li>
+      <li>MSAL cache is <code>sessionStorage</code>, and it is wiped whenever you leave, reload, or close the page. Nothing is written to <code>localStorage</code> at all, so closing the browser leaves no trace of the tenant on the machine.</li>
       <li>No refresh token is requested or stored, so nothing here can resume a session later. Inside an open tab MSAL would otherwise renew silently against your existing Microsoft sign-in for as long as the tab stayed open.</li>
       <li><b>A signed-in session is capped at two hours</b>, applied whether the token still works or not. At the cap the session ends, anything read is cleared from the page, and signing in again asks for credentials rather than passing you straight through. A tab left open cannot hold a live read on the tenant's directory indefinitely.</li>
       <li>Every call is a GET. There is no write path anywhere in this file.</li>
@@ -601,7 +601,7 @@ GET /v1.0/auditLogs/signIns?$filter=appId eq 'APP-GUID'&$top=15</pre>
 </section>
 
 <p class="foot">
-  Static page, no backend, no analytics. Every page load fetches fonts from Google Fonts and two pinned libraries from cdnjs and jsDelivr, so those services see your IP address. Nothing you paste or read from a tenant goes anywhere except Microsoft endpoints, and only when you sign in or run the optional token signature check. Your browser keeps the client and tenant IDs between visits; tokens are discarded when you leave the page.<br>
+  Static page, no backend, no analytics. Every page load fetches fonts from Google Fonts and two pinned libraries from cdnjs and jsDelivr, so those services see your IP address. Nothing you paste or read from a tenant goes anywhere except Microsoft endpoints, and only when you sign in or run the optional token signature check. Nothing is written to persistent storage: the client and tenant IDs last until you close the tab, and tokens are discarded as soon as you leave the page.<br>
   Experimental tool. Intended to augment, not replace, standard Entra admin center and Graph Explorer workflows.
 </p>
 
@@ -633,19 +633,38 @@ const DEFAULT_TENANT_ID = "";
 const SCOPES = ["Application.Read.All","User.Read.All","Directory.Read.All","AuditLog.Read.All"];
 /* =================================================================== */
 
-/* Client ID and tenant ID are public identifiers, not secrets, so they
-   live in localStorage to save retyping. Tokens never do: MSAL is
-   pinned to sessionStorage below. */
+/* Client ID and tenant ID are public identifiers, not secrets, but this tool is
+   run on shared and public machines, so nothing of one person's should still be
+   here for the next. They live in sessionStorage: kept across reloads and
+   navigation inside the tab, gone when the tab or browser closes. Tokens never
+   persist at all; MSAL is pinned to sessionStorage below and wiped on pagehide.
+
+   This page writes nothing to localStorage. It used to keep the two IDs there,
+   so loadCfg deletes any leftover rather than migrating it: on a shared machine
+   the right thing to do with a value the previous person left behind is to
+   remove it, not to adopt it into the new session. */
 const CFG_KEY = 'fedbench.cfg';
 function loadCfg(){
+  try{ localStorage.removeItem(CFG_KEY); }catch(e){}
   let c={};
-  try{ c=JSON.parse(localStorage.getItem(CFG_KEY)||'{}'); }catch(e){}
+  try{ c=JSON.parse(sessionStorage.getItem(CFG_KEY)||'{}'); }catch(e){}
   return { clientId: c.clientId||DEFAULT_CLIENT_ID, tenantId: c.tenantId||DEFAULT_TENANT_ID };
 }
 function saveCfg(){
-  try{ localStorage.setItem(CFG_KEY, JSON.stringify({
+  try{ sessionStorage.setItem(CFG_KEY, JSON.stringify({
     clientId: $('cfgClient').value.trim(), tenantId: $('cfgTenant').value.trim()
   })); }catch(e){}
+}
+/* The pagehide wipe and End session both clear sessionStorage wholesale, which
+   is deliberate: an allowlist of MSAL's key names would rot the moment MSAL
+   changed one. Preserving a single key this page owns keeps that robustness
+   while letting the two IDs survive a reload. */
+function clearSessionKeepingCfg(){
+  try{
+    const keep=sessionStorage.getItem(CFG_KEY);
+    sessionStorage.clear();
+    if(keep!==null) sessionStorage.setItem(CFG_KEY, keep);
+  }catch(e){}
 }
 
 const $ = id => document.getElementById(id);
@@ -882,6 +901,9 @@ async function initAuth(){
     saveCfg(); msalApp=null; account=null; buildAuth();
   }));
   $('cfgForget').addEventListener('click',()=>{
+    /* Both stores: sessionStorage is where they live now, localStorage in case
+       this browser still holds a copy from before the move. */
+    try{ sessionStorage.removeItem(CFG_KEY); }catch(e){}
     try{ localStorage.removeItem(CFG_KEY); }catch(e){}
     $('cfgClient').value=''; $('cfgTenant').value='';
     msalApp=null; account=null; buildAuth();
@@ -966,7 +988,7 @@ let capTimer=null, forceReauth=false;
    restored from the back-forward cache reloads, so it never shows a live
    session with no tokens behind it. */
 if(!window.opener && window.top===window.self){
-  addEventListener('pagehide',()=>{ try{ sessionStorage.clear(); }catch(e){} });
+  addEventListener('pagehide',clearSessionKeepingCfg);
   addEventListener('pageshow',ev=>{ if(ev.persisted) location.reload(); });
 }
 const sessionStart=()=>{ const v=+sessionStorage.getItem(SESSION_KEY); return v>0?v:0; };
@@ -1052,7 +1074,10 @@ $('signOut').addEventListener('click', async ()=>{
      so ending the session has to drop it too. */
   lastRun=null; $('refreshLogs').disabled=true;
   $('geNote').textContent='Placeholders are filled from the two fields above.';
-  try{ sessionStorage.clear(); if(msalApp) await msalApp.logoutPopup({account:a}); }catch(e){}
+  /* Ends the tenant session and drops every token, but keeps the two IDs in the
+     fields. Forgetting those is a separate, explicit button. */
+  clearSessionKeepingCfg();
+  try{ if(msalApp) await msalApp.logoutPopup({account:a}); }catch(e){}
 });
 async function token(){
   /* The real enforcement point. A throttled timer can fire late, so nothing gets
